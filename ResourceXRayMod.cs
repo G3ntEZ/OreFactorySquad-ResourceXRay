@@ -7,28 +7,36 @@ using UnityEngine.InputSystem;
 using Il2Cpp;
 using Il2CppI2.Loc;
 
-[assembly: MelonInfo(typeof(OFSResourceXRay.ResourceXRayMod), "Resource X-Ray", "1.4.0", "Auto")]
+[assembly: MelonInfo(typeof(OFSResourceXRay.ResourceXRayMod), "Resource X-Ray", "1.5.0", "G3ntEZ")]
 [assembly: MelonGame("threeW", "Ore Factory Squad")]
 
 namespace OFSResourceXRay
 {
     public class ResourceXRayMod : MelonMod
     {
+        private const string IdScrap = "__scrap__";
+        private const string IdAntique = "__antique__";
+
         private MelonPreferences_Category _prefs;
         private MelonPreferences_Entry<string> _selectedPrefs;
         private MelonPreferences_Entry<bool> _espEnabledPrefs;
         private MelonPreferences_Entry<float> _maxDistancePrefs;
         private MelonPreferences_Entry<string> _langPrefs;
+        private MelonPreferences_Entry<bool> _lowPerfPrefs;
+        private MelonPreferences_Entry<int> _maxMarkersPrefs;
 
         private bool _espEnabled = true;
         private bool _menuOpen;
-        /// <summary>auto | ru | en</summary>
+        private bool _lowPerf;
         private string _langMode = "auto";
         private bool _russian = true;
         private float _maxDistance = 250f;
-        private float _refreshInterval = 0.6f;
+        private int _maxMarkers = 150;
+        private float _refreshInterval = 0.75f;
+        private float _itemCacheTtl = 1.25f;
         private float _nextRefresh;
         private float _nextLangSync;
+        private float _nextCatalogRefresh;
         private int _menuIndex;
         private int _menuScrollRows;
 
@@ -36,7 +44,12 @@ namespace OFSResourceXRay
         private readonly List<OreOption> _oreOptions = new List<OreOption>(64);
         private readonly HashSet<string> _selectedIds = new HashSet<string>(StringComparer.Ordinal);
         private readonly List<Rect> _clickRects = new List<Rect>(64);
-        private float _nextCatalogRefresh;
+        private readonly Dictionary<string, string> _nameCache = new Dictionary<string, string>(128, StringComparer.Ordinal);
+
+        private T_Item[] _cachedItems;
+        private T_NodePiece[] _cachedPieces;
+        private float _cachedItemsTime;
+
         private GUIStyle _labelStyle;
         private GUIStyle _hudStyle;
         private Texture2D _pixel;
@@ -60,27 +73,33 @@ namespace OFSResourceXRay
         private class OreOption
         {
             public string Id;
-            public string Name;
+            public string NameKey;
             public Color Color;
+            public bool IsCategory;
         }
 
         public override void OnInitializeMelon()
         {
             _prefs = MelonPreferences.CreateCategory("ResourceXRay", "Resource X-Ray");
-            _selectedPrefs = _prefs.CreateEntry("SelectedOreIds", "", "Selected ore IDs");
+            _selectedPrefs = _prefs.CreateEntry("SelectedOreIds", "", "Selected target IDs");
             _espEnabledPrefs = _prefs.CreateEntry("EspEnabled", true, "ESP enabled");
             _maxDistancePrefs = _prefs.CreateEntry("MaxDistance", 250f, "Max ESP distance");
-            _langPrefs = _prefs.CreateEntry("Language", "auto", "UI language: auto (follow game) / ru / en");
+            _langPrefs = _prefs.CreateEntry("Language", "auto", "UI language: auto / ru / en");
+            _lowPerfPrefs = _prefs.CreateEntry("LowPerformance", false, "Low performance mode");
+            _maxMarkersPrefs = _prefs.CreateEntry("MaxMarkers", 150, "Max on-screen markers");
 
             _espEnabled = _espEnabledPrefs.Value;
             _maxDistance = _maxDistancePrefs.Value;
+            _lowPerf = _lowPerfPrefs.Value;
+            _maxMarkers = Math.Max(20, _maxMarkersPrefs.Value);
             _langMode = NormalizeLangMode(_langPrefs.Value);
             ApplyLanguageFromMode(forceLog: false);
+            ApplyPerformanceSettings();
             LoadSelectedFromPrefs();
 
             LoggerInstance.Msg(_russian
-                ? "Resource X-Ray v1.4 | F8 меню | L язык (Авто/RU/EN) | по умолчанию как в игре"
-                : "Resource X-Ray v1.4 | F8 menu | L language (Auto/RU/EN) | defaults to game language");
+                ? "Resource X-Ray v1.5 | F8 меню | F5 экономный режим | L язык"
+                : "Resource X-Ray v1.5 | F8 menu | F5 low perf | L language");
         }
 
         public override void OnUpdate()
@@ -92,6 +111,7 @@ namespace OFSResourceXRay
                     _menuOpen = !_menuOpen;
                     if (_menuOpen)
                     {
+                        _nameCache.Clear();
                         RefreshOreCatalog(force: true);
                         ClampMenuIndex();
                     }
@@ -107,9 +127,23 @@ namespace OFSResourceXRay
                         : $"ESP {(_espEnabled ? "ON" : "OFF")}");
                 }
 
+                if (WasPressed(Key.F5))
+                {
+                    _lowPerf = !_lowPerf;
+                    _lowPerfPrefs.Value = _lowPerf;
+                    MelonPreferences.Save();
+                    ApplyPerformanceSettings();
+                    InvalidateItemCache();
+                    LoggerInstance.Msg(_russian
+                        ? $"Экономный режим {(_lowPerf ? "ВКЛ" : "ВЫКЛ")}"
+                        : $"Low perf mode {(_lowPerf ? "ON" : "OFF")}");
+                }
+
                 if (WasPressed(Key.F6))
                 {
                     _nextRefresh = 0f;
+                    _nameCache.Clear();
+                    InvalidateItemCache();
                     RefreshOreCatalog(force: true);
                 }
 
@@ -125,16 +159,15 @@ namespace OFSResourceXRay
                 if (Time.unscaledTime >= _nextRefresh)
                 {
                     _nextRefresh = Time.unscaledTime + _refreshInterval;
-                    ScanNodes();
+                    ScanTargets();
                 }
 
                 if (Time.unscaledTime >= _nextCatalogRefresh)
                     RefreshOreCatalog(force: false);
 
-                // Keep Auto language in sync with the game
                 if (_langMode == "auto" && Time.unscaledTime >= _nextLangSync)
                 {
-                    _nextLangSync = Time.unscaledTime + 2f;
+                    _nextLangSync = Time.unscaledTime + 3f;
                     ApplyLanguageFromMode(forceLog: false);
                 }
             }
@@ -163,6 +196,29 @@ namespace OFSResourceXRay
                     LoggerInstance.Error($"OnGUI failed (logged once): {ex}");
                 }
             }
+        }
+
+        private void ApplyPerformanceSettings()
+        {
+            if (_lowPerf)
+            {
+                _refreshInterval = 1.4f;
+                _itemCacheTtl = 2.5f;
+                _maxMarkers = Math.Min(_maxMarkersPrefs.Value, 70);
+            }
+            else
+            {
+                _refreshInterval = 0.75f;
+                _itemCacheTtl = 1.25f;
+                _maxMarkers = Math.Max(20, _maxMarkersPrefs.Value);
+            }
+        }
+
+        private void InvalidateItemCache()
+        {
+            _cachedItems = null;
+            _cachedPieces = null;
+            _cachedItemsTime = 0f;
         }
 
         private void HandleMenuInput()
@@ -214,7 +270,6 @@ namespace OFSResourceXRay
             if (WasPressed(Key.L))
                 ToggleLanguage();
 
-            // Mouse click on rows (Input System, no IMGUI Event)
             Mouse mouse = Mouse.current;
             if (mouse != null && mouse.leftButton.wasPressedThisFrame)
             {
@@ -231,7 +286,6 @@ namespace OFSResourceXRay
                     }
                 }
 
-                // Top action buttons
                 if (_allOnRect.Contains(gui))
                 {
                     foreach (OreOption o in _oreOptions)
@@ -263,13 +317,13 @@ namespace OFSResourceXRay
 
         private void ToggleLanguage()
         {
-            // Cycle: auto -> ru -> en -> auto
             if (_langMode == "auto") _langMode = "ru";
             else if (_langMode == "ru") _langMode = "en";
             else _langMode = "auto";
 
             _langPrefs.Value = _langMode;
             MelonPreferences.Save();
+            _nameCache.Clear();
             ApplyLanguageFromMode(forceLog: true);
         }
 
@@ -288,12 +342,9 @@ namespace OFSResourceXRay
         private void ApplyLanguageFromMode(bool forceLog)
         {
             bool prev = _russian;
-            if (_langMode == "ru")
-                _russian = true;
-            else if (_langMode == "en")
-                _russian = false;
-            else
-                _russian = DetectGameIsRussian();
+            if (_langMode == "ru") _russian = true;
+            else if (_langMode == "en") _russian = false;
+            else _russian = DetectGameIsRussian();
 
             if (forceLog || prev != _russian)
             {
@@ -312,32 +363,23 @@ namespace OFSResourceXRay
                 if (!string.IsNullOrEmpty(code))
                 {
                     code = code.ToLowerInvariant();
-                    if (code.StartsWith("ru"))
-                        return true;
-                    if (code.StartsWith("en"))
-                        return false;
+                    if (code.StartsWith("ru")) return true;
+                    if (code.StartsWith("en")) return false;
                 }
 
                 string lang = LocalizationManager.CurrentLanguage;
                 if (!string.IsNullOrEmpty(lang))
                 {
                     lang = lang.ToLowerInvariant();
-                    if (lang.Contains("russ") || lang.Contains("рус"))
-                        return true;
-                    if (lang.Contains("engl") || lang == "en")
-                        return false;
+                    if (lang.Contains("russ") || lang.Contains("рус")) return true;
+                    if (lang.Contains("engl") || lang == "en") return false;
                 }
             }
-            catch
-            {
-                // I2 not ready yet
-            }
+            catch { }
 
-            // Fallback: Windows UI culture
             try
             {
-                string cul = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName;
-                if (cul == "ru")
+                if (System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "ru")
                     return true;
             }
             catch { }
@@ -348,7 +390,7 @@ namespace OFSResourceXRay
         private string LangButtonLabel()
         {
             if (_langMode == "auto")
-                return _russian ? "Язык: АВТО (RU)" : "Lang: AUTO (EN)";
+                return _russian ? "Язык: АВТО" : "Lang: AUTO";
             if (_langMode == "ru")
                 return "Язык: RU";
             return "Lang: EN";
@@ -390,39 +432,39 @@ namespace OFSResourceXRay
         private static bool WasPressed(Key key)
         {
             Keyboard kb = Keyboard.current;
-            if (kb == null)
-                return false;
+            if (kb == null) return false;
             var control = kb[key];
             return control != null && control.wasPressedThisFrame;
         }
 
         private void DrawHud()
         {
+            string perf = _lowPerf ? T(" | ЭКОН", " | LOW") : "";
             string status = _espEnabled
                 ? T(
-                    $"Рентген ВКЛ | выбрано:{_selectedIds.Count} | меток:{_entries.Count} | F8 меню | F7 выкл | L язык",
-                    $"X-Ray ON | selected:{_selectedIds.Count} | markers:{_entries.Count} | F8 menu | F7 off | L lang")
-                : T("Рентген ВЫКЛ (F7) | F8 меню руд", "X-Ray OFF (F7) | F8 ore menu");
-            SafeLabel(new Rect(12f, 12f, 900f, 28f), status, _hudStyle);
+                    $"Рентген ВКЛ | выбрано:{_selectedIds.Count} | меток:{_entries.Count}{perf} | F8 | F7 | F5",
+                    $"X-Ray ON | selected:{_selectedIds.Count} | markers:{_entries.Count}{perf} | F8 | F7 | F5")
+                : T("Рентген ВЫКЛ (F7) | F8 меню", "X-Ray OFF (F7) | F8 menu");
+            SafeLabel(new Rect(12f, 12f, 920f, 28f), status, _hudStyle);
         }
 
         private void DrawMenu()
         {
-            float w = 520f;
+            float w = 540f;
             float h = 80f + VisibleRows * RowH;
             Rect panel = new Rect(20f, 48f, w, h);
 
             SafeDrawTexture(panel, _panelBg);
             SafeLabel(new Rect(panel.x + 12f, panel.y + 8f, w - 24f, 22f),
-                T("Рентген руд — клик или ↑↓ + Enter | 1=всё вкл  2=всё выкл  Esc=закрыть  L=язык (Авто/RU/EN)",
-                  "Ore X-Ray — click or Up/Down + Enter | 1=All ON  2=All OFF  Esc=Close  L=lang (Auto/RU/EN)"),
+                T("Рентген — ↑↓ Enter | 1=всё 2=выкл | L=язык | F5=эконом",
+                  "X-Ray — ↑↓ Enter | 1=all 2=off | L=lang | F5=low perf"),
                 _hudStyle);
 
             float y = panel.y + 36f;
-            _allOnRect = new Rect(panel.x + 12f, y, 110f, 24f);
-            _allOffRect = new Rect(panel.x + 130f, y, 110f, 24f);
-            _closeRect = new Rect(panel.x + 248f, y, 100f, 24f);
-            _langRect = new Rect(panel.x + 356f, y, 140f, 24f);
+            _allOnRect = new Rect(panel.x + 12f, y, 100f, 24f);
+            _allOffRect = new Rect(panel.x + 120f, y, 100f, 24f);
+            _closeRect = new Rect(panel.x + 228f, y, 90f, 24f);
+            _langRect = new Rect(panel.x + 326f, y, 120f, 24f);
             DrawFakeButton(_allOnRect, T("Всё ВКЛ", "All ON"), false);
             DrawFakeButton(_allOffRect, T("Всё ВЫКЛ", "All OFF"), false);
             DrawFakeButton(_closeRect, T("Закрыть", "Close"), false);
@@ -434,8 +476,8 @@ namespace OFSResourceXRay
             if (_oreOptions.Count == 0)
             {
                 SafeLabel(new Rect(panel.x + 12f, y, w - 24f, 40f),
-                    T("Руд пока нет. Зайди на участок / дождись загрузки мира, затем F6.",
-                      "No ores found yet. Enter a dig property / wait for world load, then F6."),
+                    T("Цели не найдены. Зайди на участок и нажми F6.",
+                      "No targets yet. Enter a dig property and press F6."),
                     _hudStyle);
                 return;
             }
@@ -449,12 +491,11 @@ namespace OFSResourceXRay
                 Rect row = new Rect(panel.x + 12f, y, w - 24f, RowH - 2f);
                 _clickRects.Add(row);
 
-                Texture2D bg = hi ? _rowHi : (on ? _rowOn : _rowOff);
-                SafeDrawTexture(row, bg);
+                SafeDrawTexture(row, hi ? _rowHi : (on ? _rowOn : _rowOff));
 
-                string mark = on ? T("[ВКЛ]", "[ON] ") : T("[ВЫКЛ]", "[OFF]");
+                string mark = on ? T("[ВКЛ]", "[ON]") : T("[ВЫКЛ]", "[OFF]");
                 string prefix = hi ? "> " : "  ";
-                string displayName = LocalizeOreName(ore.Name);
+                string displayName = GetDisplayName(ore.NameKey, ore.Id);
                 GUI.color = ore.Color;
                 SafeLabel(new Rect(row.x + 8f, row.y + 4f, row.width - 16f, row.height),
                     $"{prefix}{mark}  {displayName}", _labelStyle);
@@ -465,8 +506,8 @@ namespace OFSResourceXRay
             if (_oreOptions.Count > VisibleRows)
             {
                 SafeLabel(new Rect(panel.x + 12f, panel.yMax - 22f, w - 24f, 20f),
-                    T($"Список: {_menuScrollRows + 1}-{end} / {_oreOptions.Count}  (PgUp/PgDn)",
-                      $"Scroll: {_menuScrollRows + 1}-{end} / {_oreOptions.Count}  (PgUp/PgDn)"),
+                    T($"Список: {_menuScrollRows + 1}-{end} / {_oreOptions.Count}",
+                      $"List: {_menuScrollRows + 1}-{end} / {_oreOptions.Count}"),
                     _hudStyle);
             }
         }
@@ -486,7 +527,8 @@ namespace OFSResourceXRay
             if (cam == null)
                 return;
 
-            for (int i = 0; i < _entries.Count; i++)
+            int drawCount = Math.Min(_entries.Count, _maxMarkers);
+            for (int i = 0; i < drawCount; i++)
             {
                 EspEntry e = _entries[i];
                 Vector3 screen = cam.WorldToScreenPoint(e.WorldPos);
@@ -505,53 +547,49 @@ namespace OFSResourceXRay
         private void SafeLabel(Rect r, string text, GUIStyle style)
         {
             try { GUI.Label(r, text, style); }
-            catch { try { GUI.Label(r, text); } catch { /* stripped */ } }
+            catch { try { GUI.Label(r, text); } catch { } }
         }
 
         private void SafeDrawTexture(Rect r, Texture2D tex)
         {
             if (tex == null) return;
-            try { GUI.DrawTexture(r, tex); } catch { /* stripped */ }
+            try { GUI.DrawTexture(r, tex); } catch { }
         }
 
         private void RefreshOreCatalog(bool force)
         {
-            _nextCatalogRefresh = Time.unscaledTime + 5f;
+            _nextCatalogRefresh = Time.unscaledTime + (_lowPerf ? 12f : 6f);
             var found = new Dictionary<string, OreOption>(StringComparer.Ordinal);
+
+            AddCategory(found, IdScrap, "Item_ScrapName", new Color(0.65f, 0.65f, 0.7f));
+            AddCategory(found, IdAntique, "Item_AntiqueName", new Color(0.9f, 0.75f, 0.35f));
 
             ItemSOManager mgr = ItemSOManager.Instance;
             if (mgr != null)
             {
-                Il2CppSystem.Collections.Generic.List<T_ItemSO> all = null;
-                try { all = mgr.GetAllItemSOs(); } catch { /* */ }
-                if (all != null)
+                try
                 {
-                    int count = all.Count;
-                    for (int i = 0; i < count; i++)
+                    var all = mgr.GetAllItemSOs();
+                    if (all != null)
                     {
-                        T_ItemSO so = all[i];
-                        TryAddOre(found, so);
+                        for (int i = 0; i < all.Count; i++)
+                            TryAddTarget(found, all[i]);
                     }
                 }
+                catch { }
             }
 
             try
             {
-                var live = UnityEngine.Object.FindObjectsOfType<T_Item>(true);
-                if (live != null)
+                foreach (T_Item item in GetCachedItems())
                 {
-                    for (int i = 0; i < live.Length; i++)
-                    {
-                        T_Item item = live[i];
-                        if (item == null || !item.isNode)
-                            continue;
-                        TryAddOre(found, item.so);
-                    }
+                    if (item == null) continue;
+                    TryAddTarget(found, item.so, item.isMysteryItem);
                 }
             }
             catch (Exception ex)
             {
-                LoggerInstance.Warning($"Live ore scan failed: {ex.Message}");
+                LoggerInstance.Warning($"Live scan failed: {ex.Message}");
             }
 
             if (!force && found.Count == _oreOptions.Count)
@@ -560,179 +598,325 @@ namespace OFSResourceXRay
             _oreOptions.Clear();
             foreach (var kv in found)
                 _oreOptions.Add(kv.Value);
-            _oreOptions.Sort((a, b) => string.Compare(a.Name, b.Name, StringComparison.OrdinalIgnoreCase));
+
+            _oreOptions.Sort((a, b) =>
+            {
+                if (a.IsCategory != b.IsCategory)
+                    return a.IsCategory ? -1 : 1;
+                return string.Compare(GetDisplayName(a.NameKey, a.Id), GetDisplayName(b.NameKey, b.Id), StringComparison.OrdinalIgnoreCase);
+            });
             ClampMenuIndex();
         }
 
-        private static void TryAddOre(Dictionary<string, OreOption> found, T_ItemSO so)
+        private static void AddCategory(Dictionary<string, OreOption> found, string id, string nameKey, Color color)
         {
-            if (so == null)
-                return;
-            if (!(so.isNode || so.Type == PickupType.Ore))
-                return;
-            string id = so.GetItemID();
-            if (string.IsNullOrEmpty(id) || found.ContainsKey(id))
-                return;
-            string name = string.IsNullOrEmpty(so.Name) ? id : so.Name;
             found[id] = new OreOption
             {
                 Id = id,
-                Name = name,
-                Color = ColorForName(name)
+                NameKey = nameKey,
+                Color = color,
+                IsCategory = true
             };
         }
 
-        private void ScanNodes()
+        private static void TryAddTarget(Dictionary<string, OreOption> found, T_ItemSO so, bool isMystery = false)
+        {
+            if (so == null)
+                return;
+
+            bool isOre = so.isNode || so.Type == PickupType.Ore;
+            bool isScrap = so.Type == PickupType.Scrap || (isMystery && so.mysteryType == MysteryItemType.Scrap);
+            bool isAntique = so.Type == PickupType.Antique || (isMystery && so.mysteryType == MysteryItemType.Antique);
+
+            if (!isOre && !isScrap && !isAntique)
+                return;
+
+            string id = so.GetItemID();
+            if (string.IsNullOrEmpty(id) || found.ContainsKey(id))
+                return;
+
+            string nameKey = string.IsNullOrEmpty(so.Name) ? id : so.Name;
+            found[id] = new OreOption
+            {
+                Id = id,
+                NameKey = nameKey,
+                Color = ColorForItem(so, isScrap, isAntique),
+                IsCategory = false
+            };
+        }
+
+        private void ScanTargets()
         {
             _entries.Clear();
             if (_selectedIds.Count == 0)
                 return;
 
+            bool wantScrap = _selectedIds.Contains(IdScrap);
+            bool wantAntique = _selectedIds.Contains(IdAntique);
+
             Camera cam = GetCamera();
             Vector3 origin = cam != null ? cam.transform.position : Vector3.zero;
+            float maxDistSq = _maxDistance * _maxDistance;
 
-            T_Item[] items;
-            try
+            foreach (T_Item item in GetCachedItems())
             {
-                items = UnityEngine.Object.FindObjectsOfType<T_Item>(true);
-            }
-            catch (Exception ex)
-            {
-                LoggerInstance.Warning($"FindObjectsOfType failed: {ex.Message}");
-                return;
-            }
-
-            if (items == null)
-                return;
-
-            for (int i = 0; i < items.Length; i++)
-            {
-                T_Item item = items[i];
-                if (item == null || !item.isNode)
+                if (item == null)
                     continue;
 
                 T_ItemSO so = item.so;
-                if (so == null)
+                TargetKind kind = Classify(so, item.isMysteryItem, item.isNode);
+                if (!IsWanted(kind, so, wantScrap, wantAntique))
                     continue;
 
-                string id = so.GetItemID();
-                if (string.IsNullOrEmpty(id) || !_selectedIds.Contains(id))
-                    continue;
-
-                bool addedPiece = false;
+                bool added = false;
                 int pieceCount = 0;
-                try { pieceCount = item.GetNodePieceCount(); } catch { pieceCount = 0; }
+                try { pieceCount = item.GetNodePieceCount(); } catch { }
 
                 for (int p = 0; p < pieceCount; p++)
                 {
                     T_NodePiece piece = null;
                     try { piece = item.GetNodePiece(p); } catch { continue; }
-                    if (piece == null)
-                        continue;
-                    try
-                    {
-                        if (piece.IsBroken())
-                            continue;
-                    }
-                    catch { continue; }
+                    if (piece == null) continue;
+                    try { if (piece.IsBroken()) continue; } catch { continue; }
 
                     Transform t = piece.transform;
-                    if (t == null)
-                        continue;
-                    AddEntry(t.position, so, origin);
-                    addedPiece = true;
+                    if (t == null) continue;
+                    if (AddEntry(t.position, so, kind, origin, maxDistSq))
+                        added = true;
                 }
 
-                if (!addedPiece)
+                if (!added)
                 {
                     Transform t = item.transform;
                     if (t != null)
-                        AddEntry(t.position, so, origin);
+                        AddEntry(t.position, so, kind, origin, maxDistSq);
                 }
             }
+
+            // Hidden collect nodes (antiques inside rocks) — scan all node pieces including inactive
+            if (wantScrap || wantAntique || HasAnyOreSelected())
+            {
+                foreach (T_NodePiece piece in GetCachedPieces())
+                {
+                    if (piece == null) continue;
+                    try
+                    {
+                        if (piece.IsBroken()) continue;
+                        if (!piece.HasCollectItem()) continue;
+                    }
+                    catch { continue; }
+
+                    T_Item parent = null;
+                    try { parent = piece.GetParentItem(); } catch { }
+                    T_ItemSO so = parent != null ? parent.so : null;
+                    TargetKind kind = Classify(so, parent != null && parent.isMysteryItem, parent != null && parent.isNode);
+                    if (kind == TargetKind.Unknown)
+                        kind = TargetKind.Antique;
+
+                    if (!IsWanted(kind, so, wantScrap, wantAntique))
+                        continue;
+
+                    Transform t = piece.transform;
+                    if (t != null)
+                        AddEntry(t.position, so, kind, origin, maxDistSq);
+                }
+            }
+
+            if (_entries.Count > 1)
+                _entries.Sort((a, b) => a.Distance.CompareTo(b.Distance));
         }
 
-        private void AddEntry(Vector3 worldPos, T_ItemSO so, Vector3 origin)
+        private bool HasAnyOreSelected()
         {
-            float dist = Vector3.Distance(origin, worldPos);
-            if (dist > _maxDistance)
-                return;
+            foreach (string id in _selectedIds)
+            {
+                if (id != IdScrap && id != IdAntique)
+                    return true;
+            }
+            return false;
+        }
 
-            string name = string.IsNullOrEmpty(so.Name) ? so.GetItemID() : so.Name;
+        private enum TargetKind { Unknown, Ore, Scrap, Antique }
+
+        private static TargetKind Classify(T_ItemSO so, bool isMystery, bool isNode)
+        {
+            if (so == null)
+                return TargetKind.Unknown;
+            if (so.Type == PickupType.Scrap || (isMystery && so.mysteryType == MysteryItemType.Scrap))
+                return TargetKind.Scrap;
+            if (so.Type == PickupType.Antique || (isMystery && so.mysteryType == MysteryItemType.Antique))
+                return TargetKind.Antique;
+            if (isNode || so.isNode || so.Type == PickupType.Ore)
+                return TargetKind.Ore;
+            return TargetKind.Unknown;
+        }
+
+        private bool IsWanted(TargetKind kind, T_ItemSO so, bool wantScrap, bool wantAntique)
+        {
+            if (kind == TargetKind.Scrap)
+                return wantScrap;
+            if (kind == TargetKind.Antique)
+                return wantAntique;
+            if (kind != TargetKind.Ore || so == null)
+                return false;
+
+            string id = so.GetItemID();
+            return !string.IsNullOrEmpty(id) && _selectedIds.Contains(id);
+        }
+
+        private bool AddEntry(Vector3 worldPos, T_ItemSO so, TargetKind kind, Vector3 origin, float maxDistSq)
+        {
+            float dx = worldPos.x - origin.x;
+            float dy = worldPos.y - origin.y;
+            float dz = worldPos.z - origin.z;
+            float distSq = dx * dx + dy * dy + dz * dz;
+            if (distSq > maxDistSq)
+                return false;
+
+            float dist = Mathf.Sqrt(distSq);
+            string label = GetLabel(so, kind);
             _entries.Add(new EspEntry
             {
                 WorldPos = worldPos,
-                Label = LocalizeOreName(name),
-                Color = ColorForName(name),
+                Label = label,
+                Color = ColorForItem(so, kind == TargetKind.Scrap, kind == TargetKind.Antique),
                 Distance = dist
             });
+            return true;
         }
 
-        private string LocalizeOreName(string name)
+        private string GetLabel(T_ItemSO so, TargetKind kind)
         {
-            if (!_russian || string.IsNullOrEmpty(name))
-                return name;
+            if (so != null)
+                return GetDisplayName(so.Name, so.GetItemID());
+            if (kind == TargetKind.Scrap)
+                return GetDisplayName("Item_ScrapName", IdScrap);
+            if (kind == TargetKind.Antique)
+                return GetDisplayName("Item_AntiqueName", IdAntique);
+            return "?";
+        }
 
-            string key = name.Trim().ToLowerInvariant();
-            if (OreRu.TryGetValue(key, out string ru))
-                return ru;
+        private string GetDisplayName(string nameKey, string fallbackId)
+        {
+            string cacheKey = (nameKey ?? "") + "|" + _langMode + "|" + (_russian ? "1" : "0");
+            if (_nameCache.TryGetValue(cacheKey, out string cached))
+                return cached;
 
-            if (key.EndsWith(" ore", StringComparison.Ordinal))
+            string result = ResolveDisplayName(nameKey, fallbackId);
+            _nameCache[cacheKey] = result;
+            return result;
+        }
+
+        private string ResolveDisplayName(string nameKey, string fallbackId)
+        {
+            if (fallbackId == IdScrap)
+                nameKey = "Item_ScrapName";
+            else if (fallbackId == IdAntique)
+                nameKey = "Item_AntiqueName";
+
+            if (string.IsNullOrEmpty(nameKey))
+                nameKey = fallbackId;
+            if (string.IsNullOrEmpty(nameKey))
+                return "?";
+
+            // I2 Localization (game strings like Item_BronzeName)
+            try
             {
-                string baseName = key.Substring(0, key.Length - 4).Trim();
-                if (OreRu.TryGetValue(baseName, out ru))
-                    return ru + " (руда)";
-            }
-
-            // Longest-key first to avoid short false positives (e.g. "oil" in "soil")
-            string bestKey = null;
-            string bestRu = null;
-            foreach (var kv in OreRu)
-            {
-                if (kv.Key.Length < 4)
-                    continue;
-                if (key.Contains(kv.Key) && (bestKey == null || kv.Key.Length > bestKey.Length))
+                LocalizationManager.InitializeIfNeeded();
+                string translated = LocalizationManager.GetTranslation(nameKey);
+                if (IsValidTranslation(nameKey, translated))
                 {
-                    bestKey = kv.Key;
-                    bestRu = kv.Value;
+                    return translated;
                 }
             }
-            return bestRu ?? name;
+            catch { }
+
+            // Manual fallback for keys and English names
+            return FallbackTranslate(nameKey);
         }
 
-        private static readonly Dictionary<string, string> OreRu = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        private static bool IsValidTranslation(string key, string translated)
         {
-            { "iron", "Железо" },
-            { "iron ore", "Железная руда" },
-            { "copper", "Медь" },
-            { "copper ore", "Медная руда" },
-            { "coal", "Уголь" },
-            { "gold", "Золото" },
-            { "gold ore", "Золотая руда" },
-            { "silver", "Серебро" },
-            { "silver ore", "Серебряная руда" },
-            { "quartz", "Кварц" },
-            { "sulfur", "Сера" },
-            { "sulphur", "Сера" },
-            { "clay", "Глина" },
-            { "stone", "Камень" },
-            { "limestone", "Известняк" },
-            { "sandstone", "Песчаник" },
-            { "dirt", "Земля" },
-            { "soil", "Почва" },
-            { "sand", "Песок" },
-            { "gravel", "Гравий" },
-            { "granite", "Гранит" },
-            { "bauxite", "Боксит" },
-            { "aluminum", "Алюминий" },
-            { "aluminium", "Алюминий" },
-            { "platinum", "Платина" },
-            { "diamond", "Алмаз" },
-            { "uranium", "Уран" },
-            { "obsidian", "Обсидиан" },
-            { "oil", "Нефть" },
-            { "crude oil", "Сырая нефть" },
-        };
+            if (string.IsNullOrEmpty(translated))
+                return false;
+            if (translated == key)
+                return false;
+            if (translated.StartsWith("Item_") && translated.EndsWith("Name"))
+                return false;
+            return true;
+        }
+
+        private string FallbackTranslate(string nameKey)
+        {
+            if (string.IsNullOrEmpty(nameKey))
+                return "?";
+
+            if (FallbackNames.TryGetValue(nameKey, out LocalizedPair direct))
+                return _russian ? direct.ru : direct.en;
+
+            string lower = nameKey.ToLowerInvariant();
+            if (FallbackNames.TryGetValue(lower, out direct))
+                return _russian ? direct.ru : direct.en;
+
+            if (lower.EndsWith("name") && lower.StartsWith("item_"))
+            {
+                string core = lower.Substring(5, lower.Length - 9);
+                if (FallbackNames.TryGetValue(core, out direct))
+                    return _russian ? direct.ru : direct.en;
+            }
+
+            // Plain English resource name
+            if (_russian)
+            {
+                foreach (var kv in FallbackNames)
+                {
+                    if (kv.Key.Length >= 4 && lower.Contains(kv.Key))
+                        return kv.Value.ru;
+                }
+            }
+
+            return BeautifyKey(nameKey);
+        }
+
+        private static string BeautifyKey(string key)
+        {
+            if (key.StartsWith("Item_") && key.EndsWith("Name"))
+                key = key.Substring(5, key.Length - 9);
+            return key.Replace('_', ' ');
+        }
+
+        private T_Item[] GetCachedItems()
+        {
+            if (_cachedItems != null && Time.unscaledTime - _cachedItemsTime < _itemCacheTtl)
+                return _cachedItems;
+
+            try
+            {
+                _cachedItems = UnityEngine.Object.FindObjectsOfType<T_Item>(true) ?? Array.Empty<T_Item>();
+                _cachedItemsTime = Time.unscaledTime;
+            }
+            catch
+            {
+                _cachedItems = Array.Empty<T_Item>();
+            }
+            return _cachedItems;
+        }
+
+        private T_NodePiece[] GetCachedPieces()
+        {
+            if (_cachedPieces != null && Time.unscaledTime - _cachedItemsTime < _itemCacheTtl)
+                return _cachedPieces;
+
+            try
+            {
+                _cachedPieces = UnityEngine.Object.FindObjectsOfType<T_NodePiece>(true) ?? Array.Empty<T_NodePiece>();
+            }
+            catch
+            {
+                _cachedPieces = Array.Empty<T_NodePiece>();
+            }
+            return _cachedPieces;
+        }
 
         private static Camera GetCamera()
         {
@@ -757,22 +941,28 @@ namespace OFSResourceXRay
             }
         }
 
+        private static Color ColorForItem(T_ItemSO so, bool isScrap, bool isAntique)
+        {
+            if (isScrap) return new Color(0.7f, 0.72f, 0.78f);
+            if (isAntique) return new Color(0.95f, 0.78f, 0.35f);
+            return ColorForName(so != null ? so.Name : "");
+        }
+
         private static Color ColorForName(string name)
         {
             string n = (name ?? string.Empty).ToLowerInvariant();
+            if (n.Contains("bronze")) return new Color(0.8f, 0.5f, 0.25f);
+            if (n.Contains("steel")) return new Color(0.7f, 0.75f, 0.8f);
+            if (n.Contains("titanium")) return new Color(0.75f, 0.8f, 0.85f);
             if (n.Contains("iron")) return new Color(0.85f, 0.4f, 0.25f);
             if (n.Contains("copper")) return new Color(1f, 0.55f, 0.2f);
             if (n.Contains("coal")) return new Color(0.55f, 0.55f, 0.55f);
             if (n.Contains("gold")) return new Color(1f, 0.85f, 0.15f);
             if (n.Contains("silver")) return new Color(0.85f, 0.9f, 0.95f);
-            if (n.Contains("quartz")) return new Color(0.8f, 0.95f, 1f);
-            if (n.Contains("uranium")) return new Color(0.45f, 1f, 0.3f);
+            if (n.Contains("scrap")) return new Color(0.7f, 0.72f, 0.78f);
+            if (n.Contains("antique")) return new Color(0.95f, 0.78f, 0.35f);
             if (n.Contains("diamond")) return new Color(0.5f, 0.85f, 1f);
-            if (n.Contains("clay")) return new Color(0.75f, 0.5f, 0.3f);
-            if (n.Contains("stone") || n.Contains("limestone")) return new Color(0.75f, 0.75f, 0.7f);
-            if (n.Contains("sulfur")) return new Color(1f, 0.95f, 0.2f);
-            if (n.Contains("aluminum") || n.Contains("aluminium") || n.Contains("bauxite")) return new Color(0.7f, 0.8f, 0.9f);
-            if (n.Contains("platinum")) return new Color(0.9f, 0.9f, 1f);
+            if (n.Contains("uranium")) return new Color(0.45f, 1f, 0.3f);
             return new Color(0.25f, 1f, 0.55f);
         }
 
@@ -809,23 +999,16 @@ namespace OFSResourceXRay
                 _labelStyle = new GUIStyle { fontSize = 14, fontStyle = FontStyle.Bold };
                 _labelStyle.normal.textColor = Color.white;
             }
-
             if (_hudStyle == null)
             {
                 _hudStyle = new GUIStyle { fontSize = 13, fontStyle = FontStyle.Bold };
                 _hudStyle.normal.textColor = Color.white;
             }
-
-            if (_pixel == null)
-                _pixel = MakeTex(Color.white);
-            if (_panelBg == null)
-                _panelBg = MakeTex(new Color(0f, 0f, 0f, 0.75f));
-            if (_rowOn == null)
-                _rowOn = MakeTex(new Color(0.12f, 0.45f, 0.2f, 0.9f));
-            if (_rowOff == null)
-                _rowOff = MakeTex(new Color(0.15f, 0.15f, 0.15f, 0.9f));
-            if (_rowHi == null)
-                _rowHi = MakeTex(new Color(0.2f, 0.35f, 0.55f, 0.95f));
+            if (_pixel == null) _pixel = MakeTex(Color.white);
+            if (_panelBg == null) _panelBg = MakeTex(new Color(0f, 0f, 0f, 0.75f));
+            if (_rowOn == null) _rowOn = MakeTex(new Color(0.12f, 0.45f, 0.2f, 0.9f));
+            if (_rowOff == null) _rowOff = MakeTex(new Color(0.15f, 0.15f, 0.15f, 0.9f));
+            if (_rowHi == null) _rowHi = MakeTex(new Color(0.2f, 0.35f, 0.55f, 0.95f));
         }
 
         private static Texture2D MakeTex(Color c)
@@ -845,5 +1028,35 @@ namespace OFSResourceXRay
             SafeDrawTexture(new Rect(x - 14f, y - 1f, 28f, 2f), _pixel);
             GUI.color = prev;
         }
+
+        private struct LocalizedPair { public string ru; public string en; }
+
+        private static readonly Dictionary<string, LocalizedPair> FallbackNames = new Dictionary<string, LocalizedPair>(StringComparer.OrdinalIgnoreCase)
+        {
+            { "Item_BronzeName", new LocalizedPair { ru = "Бронза", en = "Bronze" } },
+            { "Item_SteelName", new LocalizedPair { ru = "Сталь", en = "Steel" } },
+            { "Item_TitaniumName", new LocalizedPair { ru = "Титан", en = "Titanium" } },
+            { "Item_ScrapName", new LocalizedPair { ru = "Лом", en = "Scrap" } },
+            { "Item_AntiqueName", new LocalizedPair { ru = "Антиквариат", en = "Antique" } },
+            { "bronze", new LocalizedPair { ru = "Бронза", en = "Bronze" } },
+            { "steel", new LocalizedPair { ru = "Сталь", en = "Steel" } },
+            { "titanium", new LocalizedPair { ru = "Титан", en = "Titanium" } },
+            { "iron", new LocalizedPair { ru = "Железо", en = "Iron" } },
+            { "copper", new LocalizedPair { ru = "Медь", en = "Copper" } },
+            { "coal", new LocalizedPair { ru = "Уголь", en = "Coal" } },
+            { "gold", new LocalizedPair { ru = "Золото", en = "Gold" } },
+            { "silver", new LocalizedPair { ru = "Серебро", en = "Silver" } },
+            { "quartz", new LocalizedPair { ru = "Кварц", en = "Quartz" } },
+            { "sulfur", new LocalizedPair { ru = "Сера", en = "Sulfur" } },
+            { "clay", new LocalizedPair { ru = "Глина", en = "Clay" } },
+            { "stone", new LocalizedPair { ru = "Камень", en = "Stone" } },
+            { "limestone", new LocalizedPair { ru = "Известняк", en = "Limestone" } },
+            { "sandstone", new LocalizedPair { ru = "Песчаник", en = "Sandstone" } },
+            { "diamond", new LocalizedPair { ru = "Алмаз", en = "Diamond" } },
+            { "platinum", new LocalizedPair { ru = "Платина", en = "Platinum" } },
+            { "uranium", new LocalizedPair { ru = "Уран", en = "Uranium" } },
+            { "scrap", new LocalizedPair { ru = "Лом", en = "Scrap" } },
+            { "antique", new LocalizedPair { ru = "Антиквариат", en = "Antique" } },
+        };
     }
 }
