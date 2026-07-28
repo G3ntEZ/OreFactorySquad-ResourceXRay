@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Reflection;
 using System.Text;
 using MelonLoader;
 using UnityEngine;
@@ -7,7 +8,7 @@ using UnityEngine.InputSystem;
 using Il2Cpp;
 using Il2CppI2.Loc;
 
-[assembly: MelonInfo(typeof(OFSResourceXRay.ResourceXRayMod), "Resource X-Ray", "1.5.0", "G3ntEZ")]
+[assembly: MelonInfo(typeof(OFSResourceXRay.ResourceXRayMod), "Resource X-Ray", "1.6.0", "G3ntEZ")]
 [assembly: MelonGame("threeW", "Ore Factory Squad")]
 
 namespace OFSResourceXRay
@@ -41,6 +42,7 @@ namespace OFSResourceXRay
         private int _menuScrollRows;
 
         private readonly List<EspEntry> _entries = new List<EspEntry>(256);
+        private readonly List<ManualMarker> _manualMarkers = new List<ManualMarker>(64);
         private readonly List<OreOption> _oreOptions = new List<OreOption>(64);
         private readonly HashSet<string> _selectedIds = new HashSet<string>(StringComparer.Ordinal);
         private readonly List<Rect> _clickRects = new List<Rect>(64);
@@ -68,6 +70,13 @@ namespace OFSResourceXRay
             public string Label;
             public Color Color;
             public float Distance;
+            public int Count;
+        }
+
+        private struct ManualMarker
+        {
+            public Vector3 WorldPos;
+            public string Label;
         }
 
         private class OreOption
@@ -98,8 +107,8 @@ namespace OFSResourceXRay
             LoadSelectedFromPrefs();
 
             LoggerInstance.Msg(_russian
-                ? "Resource X-Ray v1.5 | F8 меню | F5 экономный режим | L язык"
-                : "Resource X-Ray v1.5 | F8 menu | F5 low perf | L language");
+                ? "Resource X-Ray v1.6 | F8 меню | F5 экономный режим | L язык"
+                : "Resource X-Ray v1.6 | F8 menu | F5 low perf | L language");
         }
 
         public override void OnUpdate()
@@ -147,6 +156,11 @@ namespace OFSResourceXRay
                     RefreshOreCatalog(force: true);
                 }
 
+                if (WasPressed(Key.U))
+                    ToggleManualMarker();
+                if (WasPressed(Key.F9))
+                    ForceUnlockVehiclePurchase();
+
                 if (_menuOpen)
                     HandleMenuInput();
 
@@ -187,6 +201,7 @@ namespace OFSResourceXRay
                     DrawMenu();
                 if (_espEnabled)
                     DrawEsp();
+                DrawManualMarkers();
             }
             catch (Exception ex)
             {
@@ -202,9 +217,9 @@ namespace OFSResourceXRay
         {
             if (_lowPerf)
             {
-                _refreshInterval = 1.4f;
-                _itemCacheTtl = 2.5f;
-                _maxMarkers = Math.Min(_maxMarkersPrefs.Value, 70);
+                _refreshInterval = 1.6f;
+                _itemCacheTtl = 3.0f;
+                _maxMarkers = Math.Min(_maxMarkersPrefs.Value, 50);
             }
             else
             {
@@ -442,9 +457,9 @@ namespace OFSResourceXRay
             string perf = _lowPerf ? T(" | ЭКОН", " | LOW") : "";
             string status = _espEnabled
                 ? T(
-                    $"Рентген ВКЛ | выбрано:{_selectedIds.Count} | меток:{_entries.Count}{perf} | F8 | F7 | F5",
-                    $"X-Ray ON | selected:{_selectedIds.Count} | markers:{_entries.Count}{perf} | F8 | F7 | F5")
-                : T("Рентген ВЫКЛ (F7) | F8 меню", "X-Ray OFF (F7) | F8 menu");
+                    $"Рентген ВКЛ | выбрано:{_selectedIds.Count} | меток:{_entries.Count} | U:{_manualMarkers.Count}{perf} | F8 | F7 | F5 | F9",
+                    $"X-Ray ON | selected:{_selectedIds.Count} | markers:{_entries.Count} | U:{_manualMarkers.Count}{perf} | F8 | F7 | F5 | F9")
+                : T($"Рентген ВЫКЛ (F7) | F8 меню | U:{_manualMarkers.Count} | F9", $"X-Ray OFF (F7) | F8 menu | U:{_manualMarkers.Count} | F9");
             SafeLabel(new Rect(12f, 12f, 920f, 28f), status, _hudStyle);
         }
 
@@ -456,8 +471,8 @@ namespace OFSResourceXRay
 
             SafeDrawTexture(panel, _panelBg);
             SafeLabel(new Rect(panel.x + 12f, panel.y + 8f, w - 24f, 22f),
-                T("Рентген — ↑↓ Enter | 1=всё 2=выкл | L=язык | F5=эконом",
-                  "X-Ray — ↑↓ Enter | 1=all 2=off | L=lang | F5=low perf"),
+                T("Рентген — ↑↓ Enter | 1=всё 2=выкл | L=язык | F5=эконом | U=метка | F9=unlock",
+                  "X-Ray — ↑↓ Enter | 1=all 2=off | L=lang | F5=low perf | U=marker | F9=unlock"),
                 _hudStyle);
 
             float y = panel.y + 36f;
@@ -539,9 +554,177 @@ namespace OFSResourceXRay
                 float y = Screen.height - screen.y;
                 DrawMarker(x, y, e.Color);
                 GUI.color = e.Color;
-                SafeLabel(new Rect(x + 10f, y - 10f, 280f, 40f), $"{e.Label}  {e.Distance:0}m", _labelStyle);
+                SafeLabel(new Rect(x + 10f, y - 10f, 280f, 40f),
+                    e.Count > 1 ? $"{e.Label} x{e.Count}  {e.Distance:0}m" : $"{e.Label}  {e.Distance:0}m",
+                    _labelStyle);
                 GUI.color = Color.white;
             }
+        }
+
+        private void DrawManualMarkers()
+        {
+            if (_manualMarkers.Count == 0)
+                return;
+
+            Camera cam = GetCamera();
+            if (cam == null)
+                return;
+
+            Color markerColor = new Color(0.2f, 1f, 1f, 1f);
+            for (int i = 0; i < _manualMarkers.Count; i++)
+            {
+                ManualMarker m = _manualMarkers[i];
+                Vector3 screen = cam.WorldToScreenPoint(m.WorldPos);
+                if (screen.z <= 0.1f)
+                    continue;
+
+                float x = screen.x;
+                float y = Screen.height - screen.y;
+                DrawMarker(x, y, markerColor);
+                GUI.color = markerColor;
+                float dist = Vector3.Distance(cam.transform.position, m.WorldPos);
+                SafeLabel(new Rect(x + 10f, y - 10f, 300f, 40f), $"{m.Label}  {dist:0}m", _labelStyle);
+                GUI.color = Color.white;
+            }
+        }
+
+        private void ToggleManualMarker()
+        {
+            Camera cam = GetCamera();
+            if (cam == null)
+                return;
+
+            Vector3 origin = cam.transform.position;
+            Vector3 dir = cam.transform.forward;
+            Vector3 placePos = origin + dir * 8f;
+
+            int nearest = -1;
+            float nearestSq = float.MaxValue;
+            for (int i = 0; i < _manualMarkers.Count; i++)
+            {
+                float d = (_manualMarkers[i].WorldPos - placePos).sqrMagnitude;
+                if (d < nearestSq)
+                {
+                    nearestSq = d;
+                    nearest = i;
+                }
+            }
+
+            if (nearest >= 0 && nearestSq <= 16f)
+            {
+                string removed = _manualMarkers[nearest].Label;
+                _manualMarkers.RemoveAt(nearest);
+                LoggerInstance.Msg(T($"Убрана метка: {removed}", $"Removed marker: {removed}"));
+                return;
+            }
+
+            int index = _manualMarkers.Count + 1;
+            _manualMarkers.Add(new ManualMarker
+            {
+                WorldPos = placePos,
+                Label = T($"Метка #{index}", $"Marker #{index}")
+            });
+            LoggerInstance.Msg(T($"Поставлена метка #{index}", $"Placed marker #{index}"));
+        }
+
+        private void ForceUnlockVehiclePurchase()
+        {
+            int touched = 0;
+            int objects = 0;
+            try
+            {
+                var all = UnityEngine.Object.FindObjectsOfType<MonoBehaviour>(true);
+                if (all == null || all.Length == 0)
+                {
+                    LoggerInstance.Warning(T("F9: объекты не найдены (зайди в мир/меню покупки техники).",
+                                            "F9: no objects found (open world/vehicle shop first)."));
+                    return;
+                }
+
+                for (int i = 0; i < all.Length; i++)
+                {
+                    var mb = all[i];
+                    if (mb == null) continue;
+                    Type t = mb.GetType();
+                    if (t == null) continue;
+
+                    string tn = t.Name ?? "";
+                    string tnl = tn.ToLowerInvariant();
+                    if (!tnl.Contains("tutorial") && !tnl.Contains("vehicle") && !tnl.Contains("upgrade") && !tnl.Contains("equipment") && !tnl.Contains("shop"))
+                        continue;
+                    objects++;
+
+                    touched += TrySetStringMember(mb, t, "Network_tutorialLockedItemId", "");
+                    touched += TrySetStringMember(mb, t, "tutorialLockedItemId", "");
+                    touched += TrySetStringMember(mb, t, "Network_unlockedOptions", "__all__");
+                    touched += TrySetStringMember(mb, t, "unlockedOptions", "__all__");
+
+                    touched += TrySetBoolMember(mb, t, "Network_isTutorialActive", false);
+                    touched += TrySetBoolMember(mb, t, "isTutorialActive", false);
+                }
+
+                LoggerInstance.Msg(T(
+                    $"F9 unlock: обработано объектов {objects}, изменено полей/свойств {touched}. Открой покупку техники заново.",
+                    $"F9 unlock: processed {objects} objects, changed {touched} members. Reopen vehicle purchase UI."));
+            }
+            catch (Exception ex)
+            {
+                LoggerInstance.Error($"F9 unlock failed: {ex.Message}");
+            }
+        }
+
+        private static int TrySetStringMember(object target, Type t, string name, string value)
+        {
+            int changed = 0;
+            try
+            {
+                PropertyInfo p = t.GetProperty(name, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                if (p != null && p.CanWrite && p.PropertyType == typeof(string))
+                {
+                    p.SetValue(target, value);
+                    changed++;
+                }
+            }
+            catch { }
+
+            try
+            {
+                FieldInfo f = t.GetField(name, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                if (f != null && f.FieldType == typeof(string))
+                {
+                    f.SetValue(target, value);
+                    changed++;
+                }
+            }
+            catch { }
+            return changed;
+        }
+
+        private static int TrySetBoolMember(object target, Type t, string name, bool value)
+        {
+            int changed = 0;
+            try
+            {
+                PropertyInfo p = t.GetProperty(name, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                if (p != null && p.CanWrite && p.PropertyType == typeof(bool))
+                {
+                    p.SetValue(target, value);
+                    changed++;
+                }
+            }
+            catch { }
+
+            try
+            {
+                FieldInfo f = t.GetField(name, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                if (f != null && f.FieldType == typeof(bool))
+                {
+                    f.SetValue(target, value);
+                    changed++;
+                }
+            }
+            catch { }
+            return changed;
         }
 
         private void SafeLabel(Rect r, string text, GUIStyle style)
@@ -635,6 +818,11 @@ namespace OFSResourceXRay
             if (string.IsNullOrEmpty(id) || found.ContainsKey(id))
                 return;
 
+            // Keep Scrap/Antique as top category toggles only.
+            // Without this, ItemSO entries duplicate the category rows in menu.
+            if (isScrap || isAntique)
+                return;
+
             string nameKey = string.IsNullOrEmpty(so.Name) ? id : so.Name;
             found[id] = new OreOption
             {
@@ -657,6 +845,7 @@ namespace OFSResourceXRay
             Camera cam = GetCamera();
             Vector3 origin = cam != null ? cam.transform.position : Vector3.zero;
             float maxDistSq = _maxDistance * _maxDistance;
+            var parentCollectSeen = new HashSet<int>();
 
             foreach (T_Item item in GetCachedItems())
             {
@@ -668,7 +857,9 @@ namespace OFSResourceXRay
                 if (!IsWanted(kind, so, wantScrap, wantAntique))
                     continue;
 
-                bool added = false;
+                // One label per ore vein / item — not per rock piece.
+                Vector3 sum = Vector3.zero;
+                int pieceAlive = 0;
                 int pieceCount = 0;
                 try { pieceCount = item.GetNodePieceCount(); } catch { }
 
@@ -681,19 +872,23 @@ namespace OFSResourceXRay
 
                     Transform t = piece.transform;
                     if (t == null) continue;
-                    if (AddEntry(t.position, so, kind, origin, maxDistSq))
-                        added = true;
+                    sum += t.position;
+                    pieceAlive++;
                 }
 
-                if (!added)
+                if (pieceAlive > 0)
+                {
+                    AddEntry(sum / pieceAlive, so, kind, origin, maxDistSq, pieceAlive);
+                }
+                else
                 {
                     Transform t = item.transform;
                     if (t != null)
-                        AddEntry(t.position, so, kind, origin, maxDistSq);
+                        AddEntry(t.position, so, kind, origin, maxDistSq, 1);
                 }
             }
 
-            // Hidden collect nodes (antiques inside rocks) — scan all node pieces including inactive
+            // Hidden collect nodes (antiques inside rocks) — one marker per parent item
             if (wantScrap || wantAntique || HasAnyOreSelected())
             {
                 foreach (T_NodePiece piece in GetCachedPieces())
@@ -708,6 +903,13 @@ namespace OFSResourceXRay
 
                     T_Item parent = null;
                     try { parent = piece.GetParentItem(); } catch { }
+                    if (parent != null)
+                    {
+                        int pid = parent.GetInstanceID();
+                        if (!parentCollectSeen.Add(pid))
+                            continue;
+                    }
+
                     T_ItemSO so = parent != null ? parent.so : null;
                     TargetKind kind = Classify(so, parent != null && parent.isMysteryItem, parent != null && parent.isNode);
                     if (kind == TargetKind.Unknown)
@@ -718,12 +920,64 @@ namespace OFSResourceXRay
 
                     Transform t = piece.transform;
                     if (t != null)
-                        AddEntry(t.position, so, kind, origin, maxDistSq);
+                        AddEntry(t.position, so, kind, origin, maxDistSq, 1);
                 }
             }
 
+            ClusterNearbyEntries(origin);
             if (_entries.Count > 1)
                 _entries.Sort((a, b) => a.Distance.CompareTo(b.Distance));
+        }
+
+        private void ClusterNearbyEntries(Vector3 origin)
+        {
+            if (_entries.Count < 2)
+                return;
+
+            float mergeDist = _lowPerf ? 14f : 10f;
+            float mergeDistSq = mergeDist * mergeDist;
+            var merged = new List<EspEntry>(_entries.Count);
+            var used = new bool[_entries.Count];
+
+            for (int i = 0; i < _entries.Count; i++)
+            {
+                if (used[i]) continue;
+                EspEntry a = _entries[i];
+                used[i] = true;
+
+                Vector3 sum = a.WorldPos * a.Count;
+                int total = a.Count;
+                Color color = a.Color;
+                string label = a.Label;
+
+                for (int j = i + 1; j < _entries.Count; j++)
+                {
+                    if (used[j]) continue;
+                    EspEntry b = _entries[j];
+                    if (!string.Equals(a.Label, b.Label, StringComparison.Ordinal))
+                        continue;
+                    if ((a.WorldPos - b.WorldPos).sqrMagnitude > mergeDistSq)
+                        continue;
+
+                    used[j] = true;
+                    sum += b.WorldPos * b.Count;
+                    total += b.Count;
+                }
+
+                Vector3 center = sum / Math.Max(1, total);
+                float dist = Vector3.Distance(origin, center);
+                merged.Add(new EspEntry
+                {
+                    WorldPos = center,
+                    Label = label,
+                    Color = color,
+                    Distance = dist,
+                    Count = total
+                });
+            }
+
+            _entries.Clear();
+            _entries.AddRange(merged);
         }
 
         private bool HasAnyOreSelected()
@@ -764,7 +1018,7 @@ namespace OFSResourceXRay
             return !string.IsNullOrEmpty(id) && _selectedIds.Contains(id);
         }
 
-        private bool AddEntry(Vector3 worldPos, T_ItemSO so, TargetKind kind, Vector3 origin, float maxDistSq)
+        private bool AddEntry(Vector3 worldPos, T_ItemSO so, TargetKind kind, Vector3 origin, float maxDistSq, int count)
         {
             float dx = worldPos.x - origin.x;
             float dy = worldPos.y - origin.y;
@@ -780,7 +1034,8 @@ namespace OFSResourceXRay
                 WorldPos = worldPos,
                 Label = label,
                 Color = ColorForItem(so, kind == TargetKind.Scrap, kind == TargetKind.Antique),
-                Distance = dist
+                Distance = dist,
+                Count = Math.Max(1, count)
             });
             return true;
         }
