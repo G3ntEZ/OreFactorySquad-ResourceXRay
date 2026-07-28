@@ -6,15 +6,34 @@ MelonLoader mod that adds **x-ray markers** for ore nodes underground. Choose wh
 
 ---
 
+> **Maintenance notice:** No further updates are planned for the **current game version**. The mod is considered feature-complete for Ore Factory Squad as it is today. If the game receives a major update, development may resume.
+
+## Screenshots
+
+| In-game ESP | Property ore list |
+|-------------|-------------------|
+| ![ESP markers](docs/screenshots/1.png) | ![Property resources](docs/screenshots/2.png) |
+
+## Support the developer
+
+If this mod helped you, you can leave a tip:
+
+**[DonationAlerts — G3ntEZ](https://www.donationalerts.com/r/g3ntez)**
+
+---
+
 ## Features
 
 - See selected ores through walls (ESP-style markers)
 - Per-ore toggle: enable only what you need
 - **Scrap** and **Antique** categories in the menu
 - Finds ore in **hidden rooms** (inactive objects + node pieces inside rocks)
-- **Low performance mode** (F5) for weak PCs — fewer markers, slower rescan
-- **Clustered ore labels** — one marker per vein (e.g. `Gold x12`) instead of per rock piece
-- **Permanent markers** (U) — place/remove persistent waypoints
+- **Low performance mode** (F5) for weak PCs — slower rescan
+- **All ore visible at any distance** — nothing cut off by range limits
+- **One label per vein** (e.g. `Gold x12`) — not per rock piece
+- **Permanent markers** (U) — place/remove waypoints on the map
+- **Clear all U markers** (I)
+- **Reload ore markers** (F4) — fix glitches when rocks/ore desync
 - Proper item names via game I2 localization (Bronze, Steel, Titanium, etc.)
 - Language modes: **Auto** (follows game I2 language), **RU**, **EN**
 - Settings are saved between sessions
@@ -55,8 +74,10 @@ MelonLoader mod that adds **x-ray markers** for ore nodes underground. Choose wh
 | **L** | Language: Auto → RU → EN → Auto |
 | **F7** | Master ESP on/off |
 | **F6** | Refresh ore list / rescan |
+| **F4** | Reload ore markers (fix desync / bugs) |
 | **F5** | Low performance mode on/off |
 | **U** | Place / remove permanent marker |
+| **I** | Clear all permanent (U) markers |
 | **Esc** | Close menu |
 
 ## Language
@@ -90,15 +111,34 @@ MIT — see [LICENSE](LICENSE).
 
 MelonLoader-мод с **рентгеном руд**: метки сквозь землю, выбор нужных ресурсов, имя и дистанция.
 
+> **Важно:** для **текущей версии игры** обновлений **больше не планируется**. Мод считается завершённым. Если игра сильно обновится — возможно продолжим разработку.
+
+## Скриншоты
+
+| Рентген в игре | Список руд на участке |
+|----------------|----------------------|
+| ![Метки руд](docs/screenshots/1.png) | ![Ресурсы участка](docs/screenshots/2.png) |
+
+## Поддержать разработчика
+
+Если мод помог — можно оставить донат:
+
+**[DonationAlerts — G3ntEZ](https://www.donationalerts.com/r/g3ntez)**
+
+---
+
 ## Возможности
 
 - Метки выбранных руд сквозь стены
 - Включение/выключение каждой руды отдельно
 - Категории **Лом** и **Антиквариат** в меню
 - Поиск руды в **скрытых комнатах** (неактивные объекты + куски внутри камня)
-- **Экономный режим** (F5) для слабых ПК — меньше меток, реже перескан
-- **Групповые метки руд** — одна метка на жилу (например `Золото x12`), а не на каждый камень
+- **Экономный режим** (F5) для слабых ПК — реже перескан
+- **Вся руда на карте** — без ограничения по дистанции
+- **Одна метка на жилу** (например `Золото x12`), а не на каждый камень
 - **Постоянные метки** (U) — ставить и снимать точки на карте
+- **Очистить все метки** (I) — убрать все точки U разом
+- **Перезагрузка меток** (F4) — если камень/руда глючит
 - Корректные названия через I2 игры (Бронза, Сталь, Титан и т.д.)
 - Язык: **Авто** (как в игре), **RU**, **EN**
 - Настройки сохраняются
@@ -135,8 +175,10 @@ MelonLoader-мод с **рентгеном руд**: метки сквозь з�
 | **L** | Язык: Авто → RU → EN |
 | **F7** | Рентген вкл/выкл |
 | **F6** | Обновить список |
+| **F4** | Перезагрузить метки руд (если баг) |
 | **F5** | Экономный режим вкл/выкл |
 | **U** | Поставить / убрать постоянную метку |
+| **I** | Очистить все метки U |
 | **Esc** | Закрыть меню |
 
 ## Язык

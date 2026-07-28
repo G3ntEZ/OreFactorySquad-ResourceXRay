@@ -8,7 +8,7 @@ using UnityEngine.InputSystem;
 using Il2Cpp;
 using Il2CppI2.Loc;
 
-[assembly: MelonInfo(typeof(OFSResourceXRay.ResourceXRayMod), "Resource X-Ray", "1.6.2", "G3ntEZ")]
+[assembly: MelonInfo(typeof(OFSResourceXRay.ResourceXRayMod), "Resource X-Ray", "1.6.3", "G3ntEZ")]
 [assembly: MelonGame("threeW", "Ore Factory Squad")]
 
 namespace OFSResourceXRay
@@ -106,8 +106,14 @@ namespace OFSResourceXRay
             LoadSelectedFromPrefs();
 
             LoggerInstance.Msg(_russian
-                ? "Resource X-Ray v1.6.2 | F8 меню | F5 экономный режим | L язык"
-                : "Resource X-Ray v1.6.2 | F8 menu | F5 low perf | L language");
+                ? "Resource X-Ray v1.6.3 | F8 меню | F4 перезагрузка | U метка | I очистка"
+                : "Resource X-Ray v1.6.3 | F8 menu | F4 reload | U marker | I clear");
+            LoggerInstance.Msg(_russian
+                ? "Обновлений для текущей версии игры пока не планируется."
+                : "No further updates planned for the current game version.");
+            LoggerInstance.Msg(_russian
+                ? "Поддержать разработчика: https://www.donationalerts.com/r/g3ntez"
+                : "Support the developer: https://www.donationalerts.com/r/g3ntez");
         }
 
         public override void OnUpdate()
@@ -155,8 +161,13 @@ namespace OFSResourceXRay
                     RefreshOreCatalog(force: true);
                 }
 
+                if (WasPressed(Key.F4))
+                    ForceReloadOreMarkers();
+
                 if (WasPressed(Key.U))
                     ToggleManualMarker();
+                if (WasPressed(Key.I))
+                    ClearAllManualMarkers();
                 if (WasPressed(Key.F9))
                     ForceUnlockVehiclePurchase();
 
@@ -454,9 +465,9 @@ namespace OFSResourceXRay
             string perf = _lowPerf ? T(" | ЭКОН", " | LOW") : "";
             string status = _espEnabled
                 ? T(
-                    $"Рентген ВКЛ | выбрано:{_selectedIds.Count} | меток:{_entries.Count} | U:{_manualMarkers.Count}{perf} | F8 | F7 | F5 | F9",
-                    $"X-Ray ON | selected:{_selectedIds.Count} | markers:{_entries.Count} | U:{_manualMarkers.Count}{perf} | F8 | F7 | F5 | F9")
-                : T($"Рентген ВЫКЛ (F7) | F8 меню | U:{_manualMarkers.Count} | F9", $"X-Ray OFF (F7) | F8 menu | U:{_manualMarkers.Count} | F9");
+                    $"Рентген ВКЛ | выбрано:{_selectedIds.Count} | меток:{_entries.Count} | U:{_manualMarkers.Count}{perf} | F8 | F4 | F7 | I",
+                    $"X-Ray ON | selected:{_selectedIds.Count} | markers:{_entries.Count} | U:{_manualMarkers.Count}{perf} | F8 | F4 | F7 | I")
+                : T($"Рентген ВЫКЛ (F7) | F8 меню | U:{_manualMarkers.Count} | F4 | I", $"X-Ray OFF (F7) | F8 menu | U:{_manualMarkers.Count} | F4 | I");
             SafeLabel(new Rect(12f, 12f, 920f, 28f), status, _hudStyle);
         }
 
@@ -468,8 +479,8 @@ namespace OFSResourceXRay
 
             SafeDrawTexture(panel, _panelBg);
             SafeLabel(new Rect(panel.x + 12f, panel.y + 8f, w - 24f, 22f),
-                T("Рентген — ↑↓ Enter | 1=всё 2=выкл | L=язык | F5=эконом | U=метка | F9=unlock",
-                  "X-Ray — ↑↓ Enter | 1=all 2=off | L=lang | F5=low perf | U=marker | F9=unlock"),
+                T("Рентген — ↑↓ Enter | 1=всё 2=выкл | L=язык | F5=эконом | U=метка | I=очистка | F4=reload",
+                  "X-Ray — ↑↓ Enter | 1=all 2=off | L=lang | F5=low perf | U=marker | I=clear | F4=reload"),
                 _hudStyle);
 
             float y = panel.y + 36f;
@@ -622,6 +633,33 @@ namespace OFSResourceXRay
                 Label = T($"Метка #{index}", $"Marker #{index}")
             });
             LoggerInstance.Msg(T($"Поставлена метка #{index}", $"Placed marker #{index}"));
+        }
+
+        private void ClearAllManualMarkers()
+        {
+            if (_manualMarkers.Count == 0)
+            {
+                LoggerInstance.Msg(T("Нет меток для очистки (U).", "No U markers to clear."));
+                return;
+            }
+
+            int removed = _manualMarkers.Count;
+            _manualMarkers.Clear();
+            LoggerInstance.Msg(T($"Удалены все метки: {removed}", $"Cleared all markers: {removed}"));
+        }
+
+        private void ForceReloadOreMarkers()
+        {
+            _entries.Clear();
+            _nameCache.Clear();
+            InvalidateItemCache();
+            _nextRefresh = 0f;
+            RefreshOreCatalog(force: true);
+            if (_espEnabled && _selectedIds.Count > 0)
+                ScanTargets();
+            LoggerInstance.Msg(T(
+                $"F4: метки руд перезагружены (найдено {_entries.Count}).",
+                $"F4: ore markers reloaded (found {_entries.Count})."));
         }
 
         private void ForceUnlockVehiclePurchase()
