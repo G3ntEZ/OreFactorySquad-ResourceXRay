@@ -8,7 +8,7 @@ using UnityEngine.InputSystem;
 using Il2Cpp;
 using Il2CppI2.Loc;
 
-[assembly: MelonInfo(typeof(OFSResourceXRay.ResourceXRayMod), "Resource X-Ray", "1.6.0", "G3ntEZ")]
+[assembly: MelonInfo(typeof(OFSResourceXRay.ResourceXRayMod), "Resource X-Ray", "1.6.2", "G3ntEZ")]
 [assembly: MelonGame("threeW", "Ore Factory Squad")]
 
 namespace OFSResourceXRay
@@ -31,8 +31,6 @@ namespace OFSResourceXRay
         private bool _lowPerf;
         private string _langMode = "auto";
         private bool _russian = true;
-        private float _maxDistance = 250f;
-        private int _maxMarkers = 150;
         private float _refreshInterval = 0.75f;
         private float _itemCacheTtl = 1.25f;
         private float _nextRefresh;
@@ -92,23 +90,24 @@ namespace OFSResourceXRay
             _prefs = MelonPreferences.CreateCategory("ResourceXRay", "Resource X-Ray");
             _selectedPrefs = _prefs.CreateEntry("SelectedOreIds", "", "Selected target IDs");
             _espEnabledPrefs = _prefs.CreateEntry("EspEnabled", true, "ESP enabled");
-            _maxDistancePrefs = _prefs.CreateEntry("MaxDistance", 250f, "Max ESP distance");
+            _maxDistancePrefs = _prefs.CreateEntry("MaxDistance", 99999f, "Max ESP distance (unused, unlimited)");
             _langPrefs = _prefs.CreateEntry("Language", "auto", "UI language: auto / ru / en");
             _lowPerfPrefs = _prefs.CreateEntry("LowPerformance", false, "Low performance mode");
-            _maxMarkersPrefs = _prefs.CreateEntry("MaxMarkers", 150, "Max on-screen markers");
+            _maxMarkersPrefs = _prefs.CreateEntry("MaxMarkers", 9999, "Max on-screen markers (unused, draw all)");
 
             _espEnabled = _espEnabledPrefs.Value;
-            _maxDistance = _maxDistancePrefs.Value;
+            // Always show the whole map — ignore old saved low distance/marker caps.
+            _maxDistancePrefs.Value = 99999f;
+            _maxMarkersPrefs.Value = 9999;
             _lowPerf = _lowPerfPrefs.Value;
-            _maxMarkers = Math.Max(20, _maxMarkersPrefs.Value);
             _langMode = NormalizeLangMode(_langPrefs.Value);
             ApplyLanguageFromMode(forceLog: false);
             ApplyPerformanceSettings();
             LoadSelectedFromPrefs();
 
             LoggerInstance.Msg(_russian
-                ? "Resource X-Ray v1.6 | F8 меню | F5 экономный режим | L язык"
-                : "Resource X-Ray v1.6 | F8 menu | F5 low perf | L language");
+                ? "Resource X-Ray v1.6.2 | F8 меню | F5 экономный режим | L язык"
+                : "Resource X-Ray v1.6.2 | F8 menu | F5 low perf | L language");
         }
 
         public override void OnUpdate()
@@ -219,13 +218,11 @@ namespace OFSResourceXRay
             {
                 _refreshInterval = 1.6f;
                 _itemCacheTtl = 3.0f;
-                _maxMarkers = Math.Min(_maxMarkersPrefs.Value, 50);
             }
             else
             {
                 _refreshInterval = 0.75f;
                 _itemCacheTtl = 1.25f;
-                _maxMarkers = Math.Max(20, _maxMarkersPrefs.Value);
             }
         }
 
@@ -542,7 +539,7 @@ namespace OFSResourceXRay
             if (cam == null)
                 return;
 
-            int drawCount = Math.Min(_entries.Count, _maxMarkers);
+            int drawCount = _entries.Count;
             for (int i = 0; i < drawCount; i++)
             {
                 EspEntry e = _entries[i];
@@ -844,7 +841,6 @@ namespace OFSResourceXRay
 
             Camera cam = GetCamera();
             Vector3 origin = cam != null ? cam.transform.position : Vector3.zero;
-            float maxDistSq = _maxDistance * _maxDistance;
             var parentCollectSeen = new HashSet<int>();
 
             foreach (T_Item item in GetCachedItems())
@@ -858,6 +854,7 @@ namespace OFSResourceXRay
                     continue;
 
                 // One label per ore vein / item — not per rock piece.
+                // No distance filter: show every selected vein on the map.
                 Vector3 sum = Vector3.zero;
                 int pieceAlive = 0;
                 int pieceCount = 0;
@@ -878,13 +875,13 @@ namespace OFSResourceXRay
 
                 if (pieceAlive > 0)
                 {
-                    AddEntry(sum / pieceAlive, so, kind, origin, maxDistSq, pieceAlive);
+                    AddEntry(sum / pieceAlive, so, kind, origin, pieceAlive);
                 }
                 else
                 {
                     Transform t = item.transform;
                     if (t != null)
-                        AddEntry(t.position, so, kind, origin, maxDistSq, 1);
+                        AddEntry(t.position, so, kind, origin, 1);
                 }
             }
 
@@ -920,64 +917,13 @@ namespace OFSResourceXRay
 
                     Transform t = piece.transform;
                     if (t != null)
-                        AddEntry(t.position, so, kind, origin, maxDistSq, 1);
+                        AddEntry(t.position, so, kind, origin, 1);
                 }
             }
 
-            ClusterNearbyEntries(origin);
+            // Do NOT merge separate veins — every deposit must stay visible.
             if (_entries.Count > 1)
                 _entries.Sort((a, b) => a.Distance.CompareTo(b.Distance));
-        }
-
-        private void ClusterNearbyEntries(Vector3 origin)
-        {
-            if (_entries.Count < 2)
-                return;
-
-            float mergeDist = _lowPerf ? 14f : 10f;
-            float mergeDistSq = mergeDist * mergeDist;
-            var merged = new List<EspEntry>(_entries.Count);
-            var used = new bool[_entries.Count];
-
-            for (int i = 0; i < _entries.Count; i++)
-            {
-                if (used[i]) continue;
-                EspEntry a = _entries[i];
-                used[i] = true;
-
-                Vector3 sum = a.WorldPos * a.Count;
-                int total = a.Count;
-                Color color = a.Color;
-                string label = a.Label;
-
-                for (int j = i + 1; j < _entries.Count; j++)
-                {
-                    if (used[j]) continue;
-                    EspEntry b = _entries[j];
-                    if (!string.Equals(a.Label, b.Label, StringComparison.Ordinal))
-                        continue;
-                    if ((a.WorldPos - b.WorldPos).sqrMagnitude > mergeDistSq)
-                        continue;
-
-                    used[j] = true;
-                    sum += b.WorldPos * b.Count;
-                    total += b.Count;
-                }
-
-                Vector3 center = sum / Math.Max(1, total);
-                float dist = Vector3.Distance(origin, center);
-                merged.Add(new EspEntry
-                {
-                    WorldPos = center,
-                    Label = label,
-                    Color = color,
-                    Distance = dist,
-                    Count = total
-                });
-            }
-
-            _entries.Clear();
-            _entries.AddRange(merged);
         }
 
         private bool HasAnyOreSelected()
@@ -1018,16 +964,12 @@ namespace OFSResourceXRay
             return !string.IsNullOrEmpty(id) && _selectedIds.Contains(id);
         }
 
-        private bool AddEntry(Vector3 worldPos, T_ItemSO so, TargetKind kind, Vector3 origin, float maxDistSq, int count)
+        private bool AddEntry(Vector3 worldPos, T_ItemSO so, TargetKind kind, Vector3 origin, int count)
         {
             float dx = worldPos.x - origin.x;
             float dy = worldPos.y - origin.y;
             float dz = worldPos.z - origin.z;
-            float distSq = dx * dx + dy * dy + dz * dz;
-            if (distSq > maxDistSq)
-                return false;
-
-            float dist = Mathf.Sqrt(distSq);
+            float dist = Mathf.Sqrt(dx * dx + dy * dy + dz * dz);
             string label = GetLabel(so, kind);
             _entries.Add(new EspEntry
             {
