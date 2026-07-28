@@ -13,6 +13,8 @@ MelonLoader mod that adds **x-ray markers** for ore nodes underground. Choose wh
 - **Scrap** and **Antique** categories in the menu
 - Finds ore in **hidden rooms** (inactive objects + node pieces inside rocks)
 - **Low performance mode** (F5) for weak PCs — fewer markers, slower rescan
+- **Clustered ore labels** — one marker per vein (e.g. `Gold x12`) instead of per rock piece
+- **Permanent markers** (U) — place/remove persistent waypoints
 - Proper item names via game I2 localization (Bronze, Steel, Titanium, etc.)
 - Language modes: **Auto** (follows game I2 language), **RU**, **EN**
 - Settings are saved between sessions
@@ -54,6 +56,7 @@ MelonLoader mod that adds **x-ray markers** for ore nodes underground. Choose wh
 | **F7** | Master ESP on/off |
 | **F6** | Refresh ore list / rescan |
 | **F5** | Low performance mode on/off |
+| **U** | Place / remove permanent marker |
 | **Esc** | Close menu |
 
 ## Language
@@ -94,6 +97,8 @@ MelonLoader-мод с **рентгеном руд**: метки сквозь з�
 - Категории **Лом** и **Антиквариат** в меню
 - Поиск руды в **скрытых комнатах** (неактивные объекты + куски внутри камня)
 - **Экономный режим** (F5) для слабых ПК — меньше меток, реже перескан
+- **Групповые метки руд** — одна метка на жилу (например `Золото x12`), а не на каждый камень
+- **Постоянные метки** (U) — ставить и снимать точки на карте
 - Корректные названия через I2 игры (Бронза, Сталь, Титан и т.д.)
 - Язык: **Авто** (как в игре), **RU**, **EN**
 - Настройки сохраняются
@@ -131,6 +136,7 @@ MelonLoader-мод с **рентгеном руд**: метки сквозь з�
 | **F7** | Рентген вкл/выкл |
 | **F6** | Обновить список |
 | **F5** | Экономный режим вкл/выкл |
+| **U** | Поставить / убрать постоянную метку |
 | **Esc** | Закрыть меню |
 
 ## Язык
