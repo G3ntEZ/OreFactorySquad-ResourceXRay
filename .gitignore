@@ -1,0 +1,13 @@
+bin/
+obj/
+.vs/
+*.user
+*.suo
+*.user
+*.dll
+!dist/*.dll
+MelonLoader/
+Il2CppAssemblies/
+UserData/
+*.log
+.DS_Store

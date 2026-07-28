@@ -1,0 +1,9 @@
+# Optional: copy to Directory.Build.props and set your game path
+# (OFSResourceXRay.csproj reads GameDir; override here if you prefer)
+
+<Project>
+  <PropertyGroup>
+    <!-- Example Steam path -->
+    <!-- <GameDir>C:\Program Files (x86)\Steam\steamapps\common\Ore Factory Squad</GameDir> -->
+  </PropertyGroup>
+</Project>
