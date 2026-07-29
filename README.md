@@ -14,6 +14,10 @@ MelonLoader mod that adds **x-ray markers** for ore nodes underground. Choose wh
 |-------------|-------------------|
 | ![ESP markers](docs/screenshots/1.png) | ![Property resources](docs/screenshots/2.png) |
 
+| Ore menu (F8) | Help inside menu | Compact HUD |
+|---------------|------------------|---------------|
+| ![Ore menu](docs/screenshots/menu.png) | ![Help](docs/screenshots/help.png) | ![HUD](docs/screenshots/hud.png) |
+
 ## Support the developer
 
 If this mod helped you, you can leave a tip:
@@ -34,8 +38,10 @@ If this mod helped you, you can leave a tip:
 - **Permanent markers** (U) — place/remove waypoints on the map
 - **Clear all U markers** (I)
 - **Reload ore markers** (F4) — fix glitches when rocks/ore desync
+- **Fly / noclip** (F3) — free flight through walls (WASD + Space/Ctrl, Shift = faster)
 - Proper item names via game I2 localization (Bronze, Steel, Titanium, etc.)
-- Language modes: **Auto** (follows game I2 language), **RU**, **EN**
+- Language modes: **Auto** (follows game I2 language), **RU**, **EN** — ore names follow the mod language too
+- In-menu **Help** with **Back**, mouse cursor, scroll wheel navigation
 - Settings are saved between sessions
 
 ## Requirements
@@ -66,7 +72,7 @@ If this mod helped you, you can leave a tip:
 | Key | Action |
 |-----|--------|
 | **F8** | Open / close ore menu |
-| **↑ / ↓** or **W / S** | Move selection |
+| **↑ / ↓** or **W / S** / **mouse wheel** | Move selection |
 | **Enter / Space / E** | Toggle selected ore ON/OFF |
 | **Mouse click** | Toggle ore / press menu buttons |
 | **1** | Enable all ores |
@@ -75,8 +81,9 @@ If this mod helped you, you can leave a tip:
 | **F7** | Master ESP on/off |
 | **F6** | Refresh ore list / rescan |
 | **F4** | Reload ore markers (fix desync / bugs) |
+| **F3** | Fly / noclip on/off |
 | **F5** | Low performance mode on/off |
-| **F10** | Open / close in-game help |
+| **F10** / **Help** | Open help inside the F8 menu |
 | **U** | Place / remove permanent marker |
 | **I** | Clear all permanent (U) markers |
 | **Esc** | Close menu |
@@ -120,6 +127,10 @@ MelonLoader-мод с **рентгеном руд**: метки сквозь з�
 |----------------|----------------------|
 | ![Метки руд](docs/screenshots/1.png) | ![Ресурсы участка](docs/screenshots/2.png) |
 
+| Меню руд (F8) | Инструкция в меню | Компактный HUD |
+|---------------|-------------------|----------------|
+| ![Меню](docs/screenshots/menu.png) | ![Помощь](docs/screenshots/help.png) | ![HUD](docs/screenshots/hud.png) |
+
 ## Поддержать разработчика
 
 Если мод помог — можно оставить донат:
@@ -140,8 +151,10 @@ MelonLoader-мод с **рентгеном руд**: метки сквозь з�
 - **Постоянные метки** (U) — ставить и снимать точки на карте
 - **Очистить все метки** (I) — убрать все точки U разом
 - **Перезагрузка меток** (F4) — если камень/руда глючит
+- **Полёт / noclip** (F3) — летать сквозь стены (WASD + Space/Ctrl, Shift = быстрее)
 - Корректные названия через I2 игры (Бронза, Сталь, Титан и т.д.)
-- Язык: **Авто** (как в игре), **RU**, **EN**
+- Язык: **Авто** (как в игре), **RU**, **EN** — названия руд тоже переключаются
+- **Помощь** внутри меню с кнопкой **Назад**, курсор мыши, колесо прокрутки
 - Настройки сохраняются
 
 ## Что нужно
@@ -168,7 +181,7 @@ MelonLoader-мод с **рентгеном руд**: метки сквозь з�
 | Клавиша | Действие |
 |---------|----------|
 | **F8** | Меню руд |
-| **↑ / ↓** или **W / S** | Выбор строки |
+| **↑ / ↓** или **W / S** / **колесо мыши** | Выбор строки |
 | **Enter / Space / E** | Вкл/выкл руду |
 | **Клик мышью** | То же + кнопки меню |
 | **1** | Включить все |
@@ -177,8 +190,9 @@ MelonLoader-мод с **рентгеном руд**: метки сквозь з�
 | **F7** | Рентген вкл/выкл |
 | **F6** | Обновить список |
 | **F4** | Перезагрузить метки руд (если баг) |
+| **F3** | Полёт / noclip вкл/выкл |
 | **F5** | Экономный режим вкл/выкл |
-| **F10** | Инструкция по моду |
+| **F10** / **Помощь** | Инструкция внутри меню F8 |
 | **U** | Поставить / убрать постоянную метку |
 | **I** | Очистить все метки U |
 | **Esc** | Закрыть меню |

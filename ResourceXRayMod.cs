@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Reflection;
 using System.Text;
@@ -8,7 +8,7 @@ using UnityEngine.InputSystem;
 using Il2Cpp;
 using Il2CppI2.Loc;
 
-[assembly: MelonInfo(typeof(OFSResourceXRay.ResourceXRayMod), "Resource X-Ray", "1.6.5", "G3ntEZ")]
+[assembly: MelonInfo(typeof(OFSResourceXRay.ResourceXRayMod), "Resource X-Ray", "1.7.0", "G3ntEZ")]
 [assembly: MelonGame("threeW", "Ore Factory Squad")]
 
 namespace OFSResourceXRay
@@ -17,6 +17,10 @@ namespace OFSResourceXRay
     {
         private const string IdScrap = "__scrap__";
         private const string IdAntique = "__antique__";
+        private const string DonationUrl = "https://www.donationalerts.com/r/g3ntez";
+        private const string BrandCredit = "by G3ntEZ";
+        private const float FlySpeed = 18f;
+        private const float FlyFastMult = 3.5f;
 
         private MelonPreferences_Category _prefs;
         private MelonPreferences_Entry<string> _selectedPrefs;
@@ -28,8 +32,27 @@ namespace OFSResourceXRay
 
         private bool _espEnabled = true;
         private bool _menuOpen;
-        private bool _helpOpen;
+        private bool _menuShowHelp;
+        private bool _flyEnabled;
         private bool _lowPerf;
+        private bool _cursorUnlockedByMenu;
+        private CursorLockMode _prevCursorLock;
+        private bool _prevCursorVisible;
+
+        private Camera _flyCam;
+        private Transform _flyCamParent;
+        private Vector3 _flyCamLocalPos;
+        private Quaternion _flyCamLocalRot;
+        private Transform _flyBody;
+        private CharacterController _flyCc;
+        private bool _flyCcWasEnabled;
+        private Rigidbody _flyRb;
+        private bool _flyRbHadGravity;
+        private bool _flyRbWasKinematic;
+        private Vector3 _flyPendingMove;
+        private Vector3 _flyDesiredCamPos;
+        private readonly List<Collider> _flyDisabledColliders = new List<Collider>(32);
+        private readonly List<bool> _flyColliderWasEnabled = new List<bool>(32);
         private string _langMode = "auto";
         private bool _russian = true;
         private float _refreshInterval = 0.75f;
@@ -53,11 +76,21 @@ namespace OFSResourceXRay
 
         private GUIStyle _labelStyle;
         private GUIStyle _hudStyle;
+        private GUIStyle _titleStyle;
+        private GUIStyle _darkTextStyle;
+        private GUIStyle _darkSmallStyle;
+        private GUIStyle _brandStyle;
         private Texture2D _pixel;
         private Texture2D _panelBg;
+        private Texture2D _panelAccent;
+        private Texture2D _chipBg;
+        private Texture2D _btnBg;
+        private Texture2D _btnAccent;
+        private Texture2D _donateBg;
         private Texture2D _rowOn;
         private Texture2D _rowOff;
         private Texture2D _rowHi;
+        private GUIStyle _fillStyle;
         private bool _loggedGuiOnce;
 
         private const int VisibleRows = 16;
@@ -97,7 +130,7 @@ namespace OFSResourceXRay
             _maxMarkersPrefs = _prefs.CreateEntry("MaxMarkers", 9999, "Max on-screen markers (unused, draw all)");
 
             _espEnabled = _espEnabledPrefs.Value;
-            // Always show the whole map — ignore old saved low distance/marker caps.
+            // Always show the whole map - ignore old saved low distance/marker caps.
             _maxDistancePrefs.Value = 99999f;
             _maxMarkersPrefs.Value = 9999;
             _lowPerf = _lowPerfPrefs.Value;
@@ -107,8 +140,8 @@ namespace OFSResourceXRay
             LoadSelectedFromPrefs();
 
             LoggerInstance.Msg(_russian
-                ? "Resource X-Ray v1.6.5 | F8 меню | F10 инструкция | F4 перезагрузка | U метка | I очистка"
-                : "Resource X-Ray v1.6.5 | F8 menu | F10 help | F4 reload | U marker | I clear");
+                ? "Resource X-Ray v1.7.0 | F8 меню | F10 инструкция | F3 полёт | by G3ntEZ"
+                : "Resource X-Ray v1.7.0 | F8 menu | F10 help | F3 fly | by G3ntEZ");
             LoggerInstance.Msg(_russian
                 ? "Обновлений для текущей версии игры пока не планируется."
                 : "No further updates planned for the current game version.");
@@ -126,9 +159,16 @@ namespace OFSResourceXRay
                     _menuOpen = !_menuOpen;
                     if (_menuOpen)
                     {
+                        _menuShowHelp = false;
                         _nameCache.Clear();
                         RefreshOreCatalog(force: true);
                         ClampMenuIndex();
+                        UnlockMenuCursor();
+                    }
+                    else
+                    {
+                        _menuShowHelp = false;
+                        RestoreMenuCursor();
                     }
                 }
 
@@ -165,6 +205,9 @@ namespace OFSResourceXRay
                 if (WasPressed(Key.F4))
                     ForceReloadOreMarkers();
 
+                if (WasPressed(Key.F3))
+                    SetFlyEnabled(!_flyEnabled);
+
                 if (WasPressed(Key.U))
                     ToggleManualMarker();
                 if (WasPressed(Key.I))
@@ -174,16 +217,36 @@ namespace OFSResourceXRay
 
                 if (WasPressed(Key.F10))
                 {
-                    _helpOpen = !_helpOpen;
-                    if (_helpOpen)
-                        _menuOpen = false;
+                    if (!_menuOpen)
+                    {
+                        _menuOpen = true;
+                        UnlockMenuCursor();
+                        _nameCache.Clear();
+                        RefreshOreCatalog(force: true);
+                    }
+                    _menuShowHelp = !_menuShowHelp;
                 }
 
-                if (_helpOpen && WasPressed(Key.Escape))
-                    _helpOpen = false;
+                if (_menuOpen && WasPressed(Key.Escape))
+                {
+                    if (_menuShowHelp)
+                        _menuShowHelp = false;
+                    else
+                        CloseMenu();
+                }
 
                 if (_menuOpen)
+                {
+                    UnlockMenuCursor();
                     HandleMenuInput();
+                }
+                else if (_cursorUnlockedByMenu)
+                {
+                    RestoreMenuCursor();
+                }
+
+                if (_flyEnabled)
+                    UpdateFlyInput();
 
                 if (!_espEnabled || _selectedIds.Count == 0)
                 {
@@ -212,6 +275,19 @@ namespace OFSResourceXRay
             }
         }
 
+        public override void OnLateUpdate()
+        {
+            try
+            {
+                if (_flyEnabled)
+                    ApplyFlyMovement();
+            }
+            catch (Exception ex)
+            {
+                LoggerInstance.Error($"OnLateUpdate fly failed: {ex}");
+            }
+        }
+
         public override void OnGUI()
         {
             try
@@ -220,8 +296,6 @@ namespace OFSResourceXRay
                 DrawHud();
                 if (_menuOpen)
                     DrawMenu();
-                if (_helpOpen)
-                    DrawHelp();
                 if (_espEnabled)
                     DrawEsp();
                 DrawManualMarkers();
@@ -259,58 +333,83 @@ namespace OFSResourceXRay
 
         private void HandleMenuInput()
         {
-            if (WasPressed(Key.Escape))
-            {
-                _menuOpen = false;
-                return;
-            }
-
-            if (WasPressed(Key.UpArrow) || WasPressed(Key.W))
-            {
-                _menuIndex--;
-                ClampMenuIndex();
-            }
-            if (WasPressed(Key.DownArrow) || WasPressed(Key.S))
-            {
-                _menuIndex++;
-                ClampMenuIndex();
-            }
-            if (WasPressed(Key.PageUp))
-            {
-                _menuIndex -= VisibleRows;
-                ClampMenuIndex();
-            }
-            if (WasPressed(Key.PageDown))
-            {
-                _menuIndex += VisibleRows;
-                ClampMenuIndex();
-            }
-
-            if (WasPressed(Key.Enter) || WasPressed(Key.Space) || WasPressed(Key.E))
-                ToggleIndex(_menuIndex);
-
-            if (WasPressed(Key.Digit1) || WasPressed(Key.Numpad1))
-            {
-                foreach (OreOption o in _oreOptions)
-                    _selectedIds.Add(o.Id);
-                SaveSelectedToPrefs();
-                _nextRefresh = 0f;
-            }
-            if (WasPressed(Key.Digit2) || WasPressed(Key.Numpad2))
-            {
-                _selectedIds.Clear();
-                SaveSelectedToPrefs();
-                _entries.Clear();
-            }
-
-            if (WasPressed(Key.L))
-                ToggleLanguage();
-
             Mouse mouse = Mouse.current;
+
+            if (!_menuShowHelp)
+            {
+                if (WasPressed(Key.UpArrow) || WasPressed(Key.W))
+                {
+                    _menuIndex--;
+                    ClampMenuIndex();
+                }
+                if (WasPressed(Key.DownArrow) || WasPressed(Key.S))
+                {
+                    _menuIndex++;
+                    ClampMenuIndex();
+                }
+                if (WasPressed(Key.PageUp))
+                {
+                    _menuIndex -= VisibleRows;
+                    ClampMenuIndex();
+                }
+                if (WasPressed(Key.PageDown))
+                {
+                    _menuIndex += VisibleRows;
+                    ClampMenuIndex();
+                }
+
+                if (mouse != null)
+                {
+                    float scroll = mouse.scroll.ReadValue().y;
+                    if (scroll > 0.01f)
+                    {
+                        _menuIndex--;
+                        ClampMenuIndex();
+                    }
+                    else if (scroll < -0.01f)
+                    {
+                        _menuIndex++;
+                        ClampMenuIndex();
+                    }
+                }
+
+                if (WasPressed(Key.Enter) || WasPressed(Key.Space) || WasPressed(Key.E))
+                    ToggleIndex(_menuIndex);
+
+                if (WasPressed(Key.Digit1) || WasPressed(Key.Numpad1))
+                {
+                    foreach (OreOption o in _oreOptions)
+                        _selectedIds.Add(o.Id);
+                    SaveSelectedToPrefs();
+                    _nextRefresh = 0f;
+                }
+                if (WasPressed(Key.Digit2) || WasPressed(Key.Numpad2))
+                {
+                    _selectedIds.Clear();
+                    SaveSelectedToPrefs();
+                    _entries.Clear();
+                }
+
+                if (WasPressed(Key.L))
+                    ToggleLanguage();
+            }
+
             if (mouse != null && mouse.leftButton.wasPressedThisFrame)
             {
                 Vector2 sp = mouse.position.ReadValue();
                 Vector2 gui = new Vector2(sp.x, Screen.height - sp.y);
+
+                if (_menuShowHelp)
+                {
+                    if (_backRect.Contains(gui))
+                        _menuShowHelp = false;
+                    else if (_closeRect.Contains(gui))
+                        CloseMenu();
+                    else if (_donateRect.Contains(gui))
+                        OpenDonationPage();
+                    return;
+                }
+
                 for (int i = 0; i < _clickRects.Count; i++)
                 {
                     if (_clickRects[i].Contains(gui))
@@ -337,19 +436,71 @@ namespace OFSResourceXRay
                 }
                 else if (_closeRect.Contains(gui))
                 {
-                    _menuOpen = false;
+                    CloseMenu();
                 }
                 else if (_langRect.Contains(gui))
                 {
                     ToggleLanguage();
                 }
+                else if (_helpBtnRect.Contains(gui))
+                {
+                    _menuShowHelp = true;
+                }
+                else if (_donateRect.Contains(gui))
+                {
+                    OpenDonationPage();
+                }
             }
+        }
+
+        private void CloseMenu()
+        {
+            _menuOpen = false;
+            _menuShowHelp = false;
+            RestoreMenuCursor();
+        }
+
+        private void UnlockMenuCursor()
+        {
+            if (!_cursorUnlockedByMenu)
+            {
+                _prevCursorLock = Cursor.lockState;
+                _prevCursorVisible = Cursor.visible;
+                _cursorUnlockedByMenu = true;
+            }
+            Cursor.lockState = CursorLockMode.None;
+            Cursor.visible = true;
+        }
+
+        private void RestoreMenuCursor()
+        {
+            if (!_cursorUnlockedByMenu)
+                return;
+            Cursor.lockState = _prevCursorLock;
+            Cursor.visible = _prevCursorVisible;
+            _cursorUnlockedByMenu = false;
         }
 
         private Rect _allOnRect;
         private Rect _allOffRect;
         private Rect _closeRect;
         private Rect _langRect;
+        private Rect _helpBtnRect;
+        private Rect _donateRect;
+        private Rect _backRect;
+
+        private void OpenDonationPage()
+        {
+            try
+            {
+                Application.OpenURL(DonationUrl);
+                LoggerInstance.Msg(T("Открываю DonationAlerts…", "Opening DonationAlerts…"));
+            }
+            catch (Exception ex)
+            {
+                LoggerInstance.Warning($"Donate open failed: {ex.Message}");
+            }
+        }
 
         private void ToggleLanguage()
         {
@@ -361,6 +512,9 @@ namespace OFSResourceXRay
             MelonPreferences.Save();
             _nameCache.Clear();
             ApplyLanguageFromMode(forceLog: true);
+            ResortOreOptions();
+            _entries.Clear();
+            _nextRefresh = 0f;
         }
 
         private static string NormalizeLangMode(string value)
@@ -368,7 +522,7 @@ namespace OFSResourceXRay
             if (string.IsNullOrEmpty(value))
                 return "auto";
             value = value.Trim().ToLowerInvariant();
-            if (value == "ru" || value == "russian" || value == "рус" || value == "русский")
+            if (value == "ru" || value == "russian" || value == "СЂСѓСЃ" || value == "СЂСѓСЃСЃРєРёР№")
                 return "ru";
             if (value == "en" || value == "english" || value == "eng")
                 return "en";
@@ -385,8 +539,10 @@ namespace OFSResourceXRay
             if (forceLog || prev != _russian)
             {
                 string modeLabel = _langMode == "auto"
-                    ? (_russian ? "Авто → русский (как в игре)" : "Auto → English (game language)")
-                    : (_russian ? "Русский (вручную)" : "English (manual)");
+                    ? (_russian
+                        ? "\u0410\u0432\u0442\u043e \u2192 \u0440\u0443\u0441\u0441\u043a\u0438\u0439 (\u043a\u0430\u043a \u0432 \u0438\u0433\u0440\u0435)"
+                        : "Auto \u2192 English (game language)")
+                    : (_russian ? "\u0420\u0443\u0441\u0441\u043a\u0438\u0439 (\u0432\u0440\u0443\u0447\u043d\u0443\u044e)" : "English (manual)");
                 LoggerInstance.Msg(modeLabel);
             }
         }
@@ -407,7 +563,7 @@ namespace OFSResourceXRay
                 if (!string.IsNullOrEmpty(lang))
                 {
                     lang = lang.ToLowerInvariant();
-                    if (lang.Contains("russ") || lang.Contains("рус")) return true;
+                    if (lang.Contains("russ") || lang.Contains("СЂСѓСЃ")) return true;
                     if (lang.Contains("engl") || lang == "en") return false;
                 }
             }
@@ -475,46 +631,125 @@ namespace OFSResourceXRay
 
         private void DrawHud()
         {
-            string perf = _lowPerf ? T(" | ЭКОН", " | LOW") : "";
+            string perf = _lowPerf ? T("ЭКОН", "LOW") : "";
+            string fly = _flyEnabled ? T("ПОЛЁТ", "FLY") : "";
             string status = _espEnabled
                 ? T(
-                    $"Рентген ВКЛ | выбрано:{_selectedIds.Count} | меток:{_entries.Count} | U:{_manualMarkers.Count}{perf} | F8 | F10 | F4 | F7",
-                    $"X-Ray ON | selected:{_selectedIds.Count} | markers:{_entries.Count} | U:{_manualMarkers.Count}{perf} | F8 | F10 | F4 | F7")
-                : T($"Рентген ВЫКЛ (F7) | F8 меню | F10 инструкция | U:{_manualMarkers.Count} | F4 | I", $"X-Ray OFF (F7) | F8 menu | F10 help | U:{_manualMarkers.Count} | F4 | I");
-            SafeLabel(new Rect(12f, 12f, 920f, 28f), status, _hudStyle);
+                    $"ВКЛ · {_selectedIds.Count} руд · {_entries.Count} меток · U:{_manualMarkers.Count}",
+                    $"ON · {_selectedIds.Count} ores · {_entries.Count} marks · U:{_manualMarkers.Count}")
+                : T("Открыть меню F8", "Open menu F8");
+
+            float chipH = 22f;
+            float padX = 12f;
+            float gap = 8f;
+            float brandW = 92f;
+            float statusW = _espEnabled ? 310f : 160f;
+            float flyW = string.IsNullOrEmpty(fly) ? 0f : 70f;
+            float perfW = string.IsNullOrEmpty(perf) ? 0f : 60f;
+
+            float contentW = padX + statusW;
+            if (flyW > 0f) contentW += gap + flyW;
+            if (perfW > 0f) contentW += gap + perfW;
+            contentW += gap + brandW + padX;
+
+            Rect bar = new Rect(14f, 12f, contentW, 34f);
+            SafeDrawTexture(bar, _panelBg);
+            SafeDrawTexture(new Rect(bar.x, bar.y, 5f, bar.height), _panelAccent);
+
+            float chipY = bar.y + 6f;
+            float x = bar.x + padX;
+            DrawTextChip(new Rect(x, chipY, statusW, chipH), status);
+            x += statusW + gap;
+            if (flyW > 0f)
+            {
+                DrawTextChip(new Rect(x, chipY, flyW, chipH), fly);
+                x += flyW + gap;
+            }
+            if (perfW > 0f)
+            {
+                DrawTextChip(new Rect(x, chipY, perfW, chipH), perf);
+                x += perfW + gap;
+            }
+            DrawBrandLabel(new Rect(x, chipY, brandW, chipH));
         }
 
         private void DrawMenu()
         {
-            float w = 540f;
-            float h = 80f + VisibleRows * RowH;
-            Rect panel = new Rect(20f, 48f, w, h);
+            float w = 580f;
+            float h = _menuShowHelp ? 640f : 118f + VisibleRows * RowH + 36f;
+            Rect panel = new Rect(18f, 52f, w, h);
 
             SafeDrawTexture(panel, _panelBg);
-            SafeLabel(new Rect(panel.x + 12f, panel.y + 8f, w - 24f, 22f),
-                T("Рентген — ↑↓ Enter | 1=всё 2=выкл | L=язык | F5=эконом | U=метка | I=очистка | F4=reload | F10=инструкция",
-                  "X-Ray — ↑↓ Enter | 1=all 2=off | L=lang | F5=low perf | U=marker | I=clear | F4=reload | F10=help"),
-                _hudStyle);
+            SafeDrawTexture(new Rect(panel.x, panel.y, panel.width, 4f), _panelAccent);
+            SafeDrawTexture(new Rect(panel.x, panel.y, 6f, panel.height), _panelAccent);
 
-            float y = panel.y + 36f;
-            _allOnRect = new Rect(panel.x + 12f, y, 100f, 24f);
-            _allOffRect = new Rect(panel.x + 120f, y, 100f, 24f);
-            _closeRect = new Rect(panel.x + 228f, y, 90f, 24f);
-            _langRect = new Rect(panel.x + 326f, y, 120f, 24f);
-            DrawFakeButton(_allOnRect, T("Всё ВКЛ", "All ON"), false);
-            DrawFakeButton(_allOffRect, T("Всё ВЫКЛ", "All OFF"), false);
-            DrawFakeButton(_closeRect, T("Закрыть", "Close"), false);
-            DrawFakeButton(_langRect, LangButtonLabel(), false);
+            float headerY = panel.y + 14f;
+            float headerH = 26f;
+            float pad = 16f;
+            float gap = 8f;
 
-            y += 32f;
+            if (_menuShowHelp)
+            {
+                DrawTextChip(new Rect(panel.x + pad, headerY, 300f, headerH),
+                    T("Инструкция · Resource X-Ray", "Help · Resource X-Ray"));
+                DrawTextChip(new Rect(panel.x + pad + 308f, headerY, 70f, headerH), "v1.7.0");
+                DrawBrandLabel(new Rect(panel.x + pad + 386f, headerY, 100f, headerH));
+
+                float hy = panel.y + 50f;
+                float helpBtnW = (panel.width - pad * 2f - gap * 2f) / 3f;
+                _backRect = new Rect(panel.x + pad, hy, helpBtnW, 28f);
+                _donateRect = new Rect(panel.x + pad + helpBtnW + gap, hy, helpBtnW, 28f);
+                _closeRect = new Rect(panel.x + pad + 2f * (helpBtnW + gap), hy, helpBtnW, 28f);
+                DrawUiButton(_backRect, T("Назад", "Back"), false);
+                DrawDonateButton(_donateRect);
+                DrawUiButton(_closeRect, T("Закрыть", "Close"), false);
+
+                DrawMenuHelpLines(panel, hy + 40f);
+                DrawFooter(panel);
+                return;
+            }
+
+            float hx = panel.x + pad;
+            DrawTextChip(new Rect(hx, headerY, 168f, headerH), "Resource X-Ray");
+            hx += 168f + gap;
+            DrawTextChip(new Rect(hx, headerY, 64f, headerH), "v1.7.0");
+            hx += 64f + gap;
+            DrawTextChip(new Rect(hx, headerY, 140f, headerH), T("Бесплатный мод", "Free mod"));
+            hx += 140f + gap;
+            DrawBrandLabel(new Rect(hx, headerY, 100f, headerH));
+
+            float y = panel.y + 50f;
+            float btnW = (panel.width - pad * 2f - gap * 5f) / 6f;
+            float bx = panel.x + pad;
+            _allOnRect = new Rect(bx, y, btnW, 28f);
+            bx += btnW + gap;
+            _allOffRect = new Rect(bx, y, btnW, 28f);
+            bx += btnW + gap;
+            _langRect = new Rect(bx, y, btnW, 28f);
+            bx += btnW + gap;
+            _helpBtnRect = new Rect(bx, y, btnW, 28f);
+            bx += btnW + gap;
+            _donateRect = new Rect(bx, y, btnW, 28f);
+            bx += btnW + gap;
+            _closeRect = new Rect(bx, y, btnW, 28f);
+
+            DrawUiButton(_allOnRect, T("Всё ВКЛ", "All ON"), false);
+            DrawUiButton(_allOffRect, T("Всё ВЫКЛ", "All OFF"), false);
+            DrawUiButton(_langRect, LangButtonLabel(), false);
+            DrawUiButton(_helpBtnRect, T("Помощь", "Help"), false);
+            DrawDonateButton(_donateRect);
+            DrawUiButton(_closeRect, T("Закрыть", "Close"), false);
+
+            y += 40f;
+            SafeDrawTexture(new Rect(panel.x + pad, y - 6f, panel.width - pad * 2f, 1f), _panelAccent);
             _clickRects.Clear();
 
             if (_oreOptions.Count == 0)
             {
-                SafeLabel(new Rect(panel.x + 12f, y, w - 24f, 40f),
+                DrawTextChip(new Rect(panel.x + 16f, y + 8f, panel.width - 32f, 44f),
                     T("Цели не найдены. Зайди на участок и нажми F6.",
-                      "No targets yet. Enter a dig property and press F6."),
-                    _hudStyle);
+                      "No targets yet. Enter a dig property and press F6."));
+                DrawFooter(panel);
                 return;
             }
 
@@ -524,102 +759,469 @@ namespace OFSResourceXRay
                 OreOption ore = _oreOptions[i];
                 bool on = _selectedIds.Contains(ore.Id);
                 bool hi = i == _menuIndex;
-                Rect row = new Rect(panel.x + 12f, y, w - 24f, RowH - 2f);
+                Rect row = new Rect(panel.x + 16f, y, panel.width - 32f, RowH - 2f);
                 _clickRects.Add(row);
-
                 SafeDrawTexture(row, hi ? _rowHi : (on ? _rowOn : _rowOff));
 
-                string mark = on ? T("[ВКЛ]", "[ON]") : T("[ВЫКЛ]", "[OFF]");
-                string prefix = hi ? "> " : "  ";
+                Rect chip = new Rect(row.x + 8f, row.y + 4f, row.width - 120f, row.height - 8f);
+                SafeDrawTexture(chip, _chipBg);
+                string mark = on ? T("ВКЛ", "ON") : T("ВЫКЛ", "OFF");
+                string prefix = hi ? "› " : "";
                 string displayName = GetDisplayName(ore.NameKey, ore.Id);
+                SafeLabel(new Rect(chip.x + 8f, chip.y + 1f, chip.width - 16f, chip.height),
+                    $"{prefix}{displayName}", _darkTextStyle);
+
+                Rect badge = new Rect(row.xMax - 100f, row.y + 4f, 88f, row.height - 8f);
+                SafeDrawTexture(badge, _chipBg);
+                Color prev = GUI.color;
                 GUI.color = ore.Color;
-                SafeLabel(new Rect(row.x + 8f, row.y + 4f, row.width - 16f, row.height),
-                    $"{prefix}{mark}  {displayName}", _labelStyle);
-                GUI.color = Color.white;
+                SafeDrawTexture(new Rect(badge.x + 6f, badge.y + 6f, 10f, 10f), _pixel);
+                GUI.color = prev;
+                SafeLabel(new Rect(badge.x + 22f, badge.y + 1f, 60f, badge.height), mark, _darkSmallStyle);
                 y += RowH;
             }
 
             if (_oreOptions.Count > VisibleRows)
             {
-                SafeLabel(new Rect(panel.x + 12f, panel.yMax - 22f, w - 24f, 20f),
-                    T($"Список: {_menuScrollRows + 1}-{end} / {_oreOptions.Count}",
-                      $"List: {_menuScrollRows + 1}-{end} / {_oreOptions.Count}"),
-                    _hudStyle);
+                DrawTextChip(new Rect(panel.x + 16f, panel.yMax - 52f, 220f, 20f),
+                    T($"Список {_menuScrollRows + 1}–{end} / {_oreOptions.Count}",
+                      $"List {_menuScrollRows + 1}–{end} / {_oreOptions.Count}"));
             }
+            DrawFooter(panel);
         }
 
-        private void DrawHelp()
+        private void DrawFooter(Rect panel)
         {
-            float w = 560f;
-            float h = 520f;
-            float x = Math.Max(20f, Screen.width - w - 24f);
-            Rect panel = new Rect(x, 48f, w, h);
+            float pad = 16f;
+            float fy = panel.yMax - 28f;
+            float fh = 20f;
+            SafeDrawTexture(new Rect(panel.x + pad, fy - 6f, panel.width - pad * 2f, 1f), _panelAccent);
+            DrawBrandLabel(new Rect(panel.x + pad, fy, 96f, fh));
+            DrawTextChip(new Rect(panel.x + pad + 104f, fy, 280f, fh),
+                T("F8 меню · F10 помощь · F3 полёт", "F8 menu · F10 help · F3 fly"));
+        }
 
-            SafeDrawTexture(panel, _panelBg);
-            SafeLabel(new Rect(panel.x + 12f, panel.y + 8f, w - 24f, 24f),
-                T("Resource X-Ray — инструкция (F10 / Esc)", "Resource X-Ray — help (F10 / Esc)"),
-                _hudStyle);
+        private void DrawBrandLabel(Rect r)
+        {
+            // White credit text, vertically centered in the same band as chips.
+            if (_brandStyle != null)
+                _brandStyle.alignment = TextAnchor.MiddleLeft;
+            SafeLabel(r, BrandCredit, _brandStyle);
+        }
 
+        private void DrawMenuHelpLines(Rect panel, float startY)
+        {
             string[] lines = _russian
                 ? new[]
                 {
                     "Как пользоваться:",
-                    "1) F8 — открыть меню руд",
-                    "2) ↑↓ / W S — выбрать руду",
-                    "3) Enter / E / Space — вкл/выкл руду",
-                    "4) 1 — включить все, 2 — выключить все",
+                    "1) F8 — меню руд",
+                    "2) ↑↓ / W S / колесо мыши — выбрать руду",
+                    "3) Enter / E / Space — вкл/выкл",
+                    "4) 1 — всё вкл, 2 — всё выкл",
                     "5) F7 — рентген вкл/выкл",
-                    "6) F6 — обновить список руд на участке",
-                    "7) F4 — перезагрузить метки (если баг камня/руды)",
-                    "8) F5 — экономный режим для слабых ПК",
-                    "9) U — поставить/убрать метку на прицеле",
-                    "10) I — очистить все метки U",
-                    "11) L — язык: Авто / RU / EN",
-                    "12) F10 — эта инструкция",
+                    "6) F6 — обновить список",
+                    "7) F4 — перезагрузить метки",
+                    "8) F5 — экономный режим",
+                    "9) F3 — полёт / noclip",
+                    "   WASD + Space/Ctrl, Shift быстрее",
+                    "10) U — метка на прицеле",
+                    "11) I — очистить все метки U",
+                    "12) L — язык Авто / RU / EN",
+                    "13) F10 / Помощь — эта инструкция",
                     "",
-                    "Метки руд видны сквозь землю на любой дистанции.",
-                    "Одна метка = одна жила (например: Золото x12).",
+                    "Метки видны сквозь землю на любой дистанции.",
+                    "Одна метка = одна жила (Золото x12).",
                     "",
                     "Обновлений для текущей версии игры больше не будет.",
-                    "Поддержать разработчика:",
-                    "donationalerts.com/r/g3ntez"
+                    "Поддержать автора — кнопка Донат"
                 }
                 : new[]
                 {
                     "How to use:",
-                    "1) F8 — open ore menu",
-                    "2) Up/Down or W/S — select ore",
-                    "3) Enter / E / Space — toggle ore",
-                    "4) 1 — enable all, 2 — disable all",
+                    "1) F8 — ore menu",
+                    "2) Up/Down, W/S or mouse wheel — select",
+                    "3) Enter / E / Space — toggle",
+                    "4) 1 — all on, 2 — all off",
                     "5) F7 — ESP on/off",
-                    "6) F6 — refresh ore list on property",
-                    "7) F4 — reload markers (stone/ore bug fix)",
-                    "8) F5 — low performance mode",
-                    "9) U — place/remove marker at crosshair",
-                    "10) I — clear all U markers",
-                    "11) L — language: Auto / RU / EN",
-                    "12) F10 — this help panel",
+                    "6) F6 — refresh list",
+                    "7) F4 — reload markers",
+                    "8) F5 — low performance",
+                    "9) F3 — fly / noclip",
+                    "   WASD + Space/Ctrl, Shift faster",
+                    "10) U — crosshair marker",
+                    "11) I — clear all U markers",
+                    "12) L — language Auto / RU / EN",
+                    "13) F10 / Help — this help",
                     "",
-                    "Ore markers show through terrain at any distance.",
-                    "One marker = one vein (e.g. Gold x12).",
+                    "Markers show through terrain at any distance.",
+                    "One marker = one vein (Gold x12).",
                     "",
-                    "No further updates planned for current game version.",
-                    "Support the developer:",
-                    "donationalerts.com/r/g3ntez"
+                    "No further updates for current game version.",
+                    "Support the author — Donate button"
                 };
 
-            float y = panel.y + 36f;
+            float y = startY;
             for (int i = 0; i < lines.Length; i++)
             {
-                SafeLabel(new Rect(panel.x + 12f, y, w - 24f, 20f), lines[i], _hudStyle);
-                y += 20f;
+                if (string.IsNullOrEmpty(lines[i])) { y += 10f; continue; }
+                DrawTextChip(new Rect(panel.x + 16f, y, panel.width - 32f, 22f), lines[i]);
+                y += 24f;
             }
+        }
+
+        private void DrawTextChip(Rect r, string text)
+        {
+            SafeDrawTexture(r, _chipBg);
+            SafeLabel(new Rect(r.x + 8f, r.y + 2f, r.width - 12f, r.height - 2f), text, _darkTextStyle);
+        }
+
+        private void DrawUiButton(Rect r, string text, bool active)
+        {
+            SafeDrawTexture(r, active ? _btnAccent : _btnBg);
+            SafeDrawTexture(new Rect(r.x + 2f, r.y + 2f, r.width - 4f, r.height - 4f), _chipBg);
+            SafeLabel(new Rect(r.x + 6f, r.y + 4f, r.width - 10f, r.height - 6f), text, _darkSmallStyle);
+        }
+
+        private void DrawDonateButton(Rect r)
+        {
+            SafeDrawTexture(r, _donateBg);
+            SafeDrawTexture(new Rect(r.x + 2f, r.y + 2f, r.width - 4f, r.height - 4f), _chipBg);
+            SafeLabel(new Rect(r.x + 6f, r.y + 4f, r.width - 10f, r.height - 6f),
+                T("Донат", "Donate"), _darkSmallStyle);
         }
 
         private void DrawFakeButton(Rect r, string text, bool active)
         {
-            SafeDrawTexture(r, active ? _rowOn : _rowOff);
-            SafeLabel(new Rect(r.x + 8f, r.y + 3f, r.width - 10f, r.height), text, _hudStyle);
+            DrawUiButton(r, text, active);
+        }
+        private void SetFlyEnabled(bool enabled)
+        {
+            if (enabled == _flyEnabled)
+                return;
+
+            if (enabled)
+            {
+                if (!TryBeginFly())
+                {
+                    LoggerInstance.Warning(T("F3: не найдена камера для полёта.",
+                                            "F3: no camera found for fly mode."));
+                    return;
+                }
+                _flyEnabled = true;
+                LoggerInstance.Msg(T(
+                    $"Полёт/noclip ВКЛ (F3). WASD/стрелки + Space/Ctrl, Shift быстрее. Камера: {_flyCam.name}",
+                    $"Fly/noclip ON (F3). WASD/arrows + Space/Ctrl, Shift faster. Cam: {_flyCam.name}"));
+            }
+            else
+            {
+                EndFly();
+                _flyEnabled = false;
+                LoggerInstance.Msg(T("Полёт/noclip ВЫКЛ.", "Fly/noclip OFF."));
+            }
+        }
+
+        private bool TryBeginFly()
+        {
+            Camera cam = GetCamera();
+            if (cam == null)
+                return false;
+
+            _flyCam = cam;
+            Transform camT = cam.transform;
+            _flyCamParent = camT.parent;
+            _flyCamLocalPos = camT.localPosition;
+            _flyCamLocalRot = camT.localRotation;
+
+            // Detach camera so game body sync cannot pull the view back.
+            try { camT.SetParent(null, true); } catch { }
+
+            _flyBody = FindNearbyMoveBody(camT.position);
+            _flyCc = null;
+            _flyRb = null;
+            _flyDisabledColliders.Clear();
+            _flyColliderWasEnabled.Clear();
+            _flyPendingMove = Vector3.zero;
+            _flyDesiredCamPos = camT.position;
+
+            if (_flyBody != null)
+            {
+                try
+                {
+                    CharacterController cc = _flyBody.GetComponent<CharacterController>();
+                    if (cc == null)
+                        cc = _flyBody.GetComponentInChildren<CharacterController>();
+                    if (cc != null)
+                    {
+                        _flyCc = cc;
+                        _flyCcWasEnabled = cc.enabled;
+                        cc.enabled = false;
+                    }
+                }
+                catch { }
+
+                try
+                {
+                    Rigidbody rb = _flyBody.GetComponent<Rigidbody>();
+                    if (rb == null)
+                        rb = _flyBody.GetComponentInChildren<Rigidbody>();
+                    if (rb != null)
+                    {
+                        _flyRb = rb;
+                        _flyRbHadGravity = rb.useGravity;
+                        _flyRbWasKinematic = rb.isKinematic;
+                        rb.useGravity = false;
+                        rb.isKinematic = true;
+                        try { rb.velocity = Vector3.zero; } catch { }
+                        try { rb.angularVelocity = Vector3.zero; } catch { }
+                    }
+                }
+                catch { }
+
+                try
+                {
+                    Collider[] cols = _flyBody.GetComponentsInChildren<Collider>(true);
+                    if (cols != null)
+                    {
+                        for (int i = 0; i < cols.Length; i++)
+                        {
+                            Collider c = cols[i];
+                            if (c == null) continue;
+                            _flyDisabledColliders.Add(c);
+                            _flyColliderWasEnabled.Add(c.enabled);
+                            c.enabled = false;
+                        }
+                    }
+                }
+                catch { }
+            }
+
+            return true;
+        }
+
+        private void EndFly()
+        {
+            try
+            {
+                for (int i = 0; i < _flyDisabledColliders.Count; i++)
+                {
+                    Collider c = _flyDisabledColliders[i];
+                    if (c == null) continue;
+                    c.enabled = _flyColliderWasEnabled[i];
+                }
+            }
+            catch { }
+
+            try
+            {
+                if (_flyCc != null)
+                    _flyCc.enabled = _flyCcWasEnabled;
+            }
+            catch { }
+
+            try
+            {
+                if (_flyRb != null)
+                {
+                    _flyRb.isKinematic = _flyRbWasKinematic;
+                    _flyRb.useGravity = _flyRbHadGravity;
+                }
+            }
+            catch { }
+
+            try
+            {
+                if (_flyCam != null)
+                {
+                    Transform camT = _flyCam.transform;
+                    if (_flyCamParent != null)
+                    {
+                        camT.SetParent(_flyCamParent, true);
+                        camT.localPosition = _flyCamLocalPos;
+                        camT.localRotation = _flyCamLocalRot;
+                    }
+                }
+            }
+            catch { }
+
+            _flyDisabledColliders.Clear();
+            _flyColliderWasEnabled.Clear();
+            _flyCc = null;
+            _flyRb = null;
+            _flyBody = null;
+            _flyCam = null;
+            _flyCamParent = null;
+            _flyPendingMove = Vector3.zero;
+        }
+
+        private void UpdateFlyInput()
+        {
+            if (_menuOpen)
+            {
+                _flyPendingMove = Vector3.zero;
+                return;
+            }
+
+            Camera cam = _flyCam != null ? _flyCam : GetCamera();
+            if (cam == null)
+                return;
+
+            Vector3 move = Vector3.zero;
+            Transform t = cam.transform;
+
+            // New Input System
+            Keyboard kb = Keyboard.current;
+            if (kb != null)
+            {
+                if (IsHeld(kb, Key.W) || IsHeld(kb, Key.UpArrow)) move += t.forward;
+                if (IsHeld(kb, Key.S) || IsHeld(kb, Key.DownArrow)) move -= t.forward;
+                if (IsHeld(kb, Key.A) || IsHeld(kb, Key.LeftArrow)) move -= t.right;
+                if (IsHeld(kb, Key.D) || IsHeld(kb, Key.RightArrow)) move += t.right;
+                if (IsHeld(kb, Key.Space)) move += Vector3.up;
+                if (IsHeld(kb, Key.LeftCtrl) || IsHeld(kb, Key.RightCtrl) || IsHeld(kb, Key.C))
+                    move += Vector3.down;
+            }
+
+            // Legacy Input fallback (some builds swallow InputSystem keys)
+            try
+            {
+                float hx = Input.GetAxisRaw("Horizontal");
+                float hy = Input.GetAxisRaw("Vertical");
+                if (Mathf.Abs(hx) > 0.01f) move += t.right * hx;
+                if (Mathf.Abs(hy) > 0.01f) move += t.forward * hy;
+                if (Input.GetKey(KeyCode.Space)) move += Vector3.up;
+                if (Input.GetKey(KeyCode.LeftControl) || Input.GetKey(KeyCode.RightControl) || Input.GetKey(KeyCode.C))
+                    move += Vector3.down;
+                if (Input.GetKey(KeyCode.W) || Input.GetKey(KeyCode.UpArrow)) move += t.forward;
+                if (Input.GetKey(KeyCode.S) || Input.GetKey(KeyCode.DownArrow)) move -= t.forward;
+                if (Input.GetKey(KeyCode.A) || Input.GetKey(KeyCode.LeftArrow)) move -= t.right;
+                if (Input.GetKey(KeyCode.D) || Input.GetKey(KeyCode.RightArrow)) move += t.right;
+            }
+            catch { }
+
+            if (move.sqrMagnitude > 0.0001f)
+            {
+                move.Normalize();
+                bool fast = false;
+                if (kb != null)
+                    fast = IsHeld(kb, Key.LeftShift) || IsHeld(kb, Key.RightShift);
+                try { fast = fast || Input.GetKey(KeyCode.LeftShift) || Input.GetKey(KeyCode.RightShift); } catch { }
+                float speed = FlySpeed * (fast ? FlyFastMult : 1f);
+                _flyPendingMove = move * speed;
+            }
+            else
+            {
+                _flyPendingMove = Vector3.zero;
+            }
+        }
+
+        private void ApplyFlyMovement()
+        {
+            if (_flyCam == null)
+            {
+                _flyCam = GetCamera();
+                if (_flyCam == null)
+                    return;
+                _flyDesiredCamPos = _flyCam.transform.position;
+            }
+
+            Transform camT = _flyCam.transform;
+
+            // Game may re-parent camera each frame вЂ” keep it free while flying.
+            try
+            {
+                if (camT.parent != null)
+                    camT.SetParent(null, true);
+            }
+            catch { }
+
+            if (_flyPendingMove.sqrMagnitude > 0.0001f)
+                _flyDesiredCamPos += _flyPendingMove * Time.unscaledDeltaTime;
+
+            camT.position = _flyDesiredCamPos;
+
+            if (_flyBody != null)
+            {
+                try
+                {
+                    Vector3 bodyPos = _flyDesiredCamPos - camT.up * 1.6f;
+                    if (_flyRb != null && !_flyRb.isKinematic)
+                    {
+                        _flyRb.MovePosition(bodyPos);
+                    }
+                    else
+                    {
+                        _flyBody.position = bodyPos;
+                    }
+                }
+                catch { }
+            }
+        }
+
+        private static bool IsHeld(Keyboard kb, Key key)
+        {
+            try
+            {
+                var control = kb[key];
+                return control != null && control.isPressed;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static Transform FindNearbyMoveBody(Vector3 nearPos)
+        {
+            try
+            {
+                CharacterController[] ccs = UnityEngine.Object.FindObjectsOfType<CharacterController>();
+                Transform best = null;
+                float bestDist = 8f * 8f;
+                if (ccs != null)
+                {
+                    for (int i = 0; i < ccs.Length; i++)
+                    {
+                        CharacterController cc = ccs[i];
+                        if (cc == null || !cc.enabled) continue;
+                        float d = (cc.transform.position - nearPos).sqrMagnitude;
+                        if (d < bestDist)
+                        {
+                            bestDist = d;
+                            best = cc.transform;
+                        }
+                    }
+                }
+                if (best != null)
+                    return best;
+            }
+            catch { }
+
+            try
+            {
+                Rigidbody[] rbs = UnityEngine.Object.FindObjectsOfType<Rigidbody>();
+                Transform best = null;
+                float bestDist = 8f * 8f;
+                if (rbs != null)
+                {
+                    for (int i = 0; i < rbs.Length; i++)
+                    {
+                        Rigidbody rb = rbs[i];
+                        if (rb == null) continue;
+                        float d = (rb.transform.position - nearPos).sqrMagnitude;
+                        if (d < bestDist)
+                        {
+                            bestDist = d;
+                            best = rb.transform;
+                        }
+                    }
+                }
+                return best;
+            }
+            catch
+            {
+                return null;
+            }
         }
 
         private void DrawEsp()
@@ -709,7 +1311,7 @@ namespace OFSResourceXRay
             _manualMarkers.Add(new ManualMarker
             {
                 WorldPos = placePos,
-                Label = T($"Метка #{index}", $"Marker #{index}")
+                Label = T($"РњРµС‚РєР° #{index}", $"Marker #{index}")
             });
             LoggerInstance.Msg(T($"Поставлена метка #{index}", $"Placed marker #{index}"));
         }
@@ -854,14 +1456,46 @@ namespace OFSResourceXRay
 
         private void SafeLabel(Rect r, string text, GUIStyle style)
         {
-            try { GUI.Label(r, text, style); }
-            catch { try { GUI.Label(r, text); } catch { } }
+            try
+            {
+                Color prev = GUI.color;
+                GUI.color = Color.white;
+                GUI.Label(r, text ?? "", style ?? GUI.skin.label);
+                GUI.color = prev;
+            }
+            catch
+            {
+                try { GUI.Label(r, text ?? ""); } catch { }
+            }
         }
 
         private void SafeDrawTexture(Rect r, Texture2D tex)
         {
-            if (tex == null) return;
-            try { GUI.DrawTexture(r, tex); } catch { }
+            if (tex == null || r.width < 1f || r.height < 1f)
+                return;
+            Color prev = GUI.color;
+            GUI.color = Color.white;
+            try
+            {
+                GUI.DrawTexture(r, tex, ScaleMode.StretchToFill, true);
+            }
+            catch
+            {
+                try
+                {
+                    if (_fillStyle == null)
+                    {
+                        _fillStyle = new GUIStyle();
+                        _fillStyle.border = new RectOffset(0, 0, 0, 0);
+                        _fillStyle.margin = new RectOffset(0, 0, 0, 0);
+                        _fillStyle.padding = new RectOffset(0, 0, 0, 0);
+                    }
+                    _fillStyle.normal.background = tex;
+                    GUI.Box(r, GUIContent.none, _fillStyle);
+                }
+                catch { }
+            }
+            GUI.color = prev;
         }
 
         private void RefreshOreCatalog(bool force)
@@ -907,13 +1541,20 @@ namespace OFSResourceXRay
             foreach (var kv in found)
                 _oreOptions.Add(kv.Value);
 
+            ResortOreOptions();
+            ClampMenuIndex();
+        }
+
+        private void ResortOreOptions()
+        {
+            if (_oreOptions.Count <= 1)
+                return;
             _oreOptions.Sort((a, b) =>
             {
                 if (a.IsCategory != b.IsCategory)
                     return a.IsCategory ? -1 : 1;
                 return string.Compare(GetDisplayName(a.NameKey, a.Id), GetDisplayName(b.NameKey, b.Id), StringComparison.OrdinalIgnoreCase);
             });
-            ClampMenuIndex();
         }
 
         private static void AddCategory(Dictionary<string, OreOption> found, string id, string nameKey, Color color)
@@ -981,7 +1622,7 @@ namespace OFSResourceXRay
                 if (!IsWanted(kind, so, wantScrap, wantAntique))
                     continue;
 
-                // One label per ore vein / item — not per rock piece.
+                // One label per ore vein / item вЂ” not per rock piece.
                 // No distance filter: show every selected vein on the map.
                 Vector3 sum = Vector3.zero;
                 int pieceAlive = 0;
@@ -1013,7 +1654,7 @@ namespace OFSResourceXRay
                 }
             }
 
-            // Hidden collect nodes (antiques inside rocks) — one marker per parent item
+            // Hidden collect nodes (antiques inside rocks) вЂ” one marker per parent item
             if (wantScrap || wantAntique || HasAnyOreSelected())
             {
                 foreach (T_NodePiece piece in GetCachedPieces())
@@ -1049,7 +1690,7 @@ namespace OFSResourceXRay
                 }
             }
 
-            // Do NOT merge separate veins — every deposit must stay visible.
+            // Do NOT merge separate veins вЂ” every deposit must stay visible.
             if (_entries.Count > 1)
                 _entries.Sort((a, b) => a.Distance.CompareTo(b.Distance));
         }
@@ -1144,19 +1785,20 @@ namespace OFSResourceXRay
             if (string.IsNullOrEmpty(nameKey))
                 return "?";
 
-            // I2 Localization (game strings like Item_BronzeName)
+            // Manual RU/EN: use our bilingual table so ore names match the menu language.
+            // Game I2 always follows the game language and ignores the mod toggle.
+            if (_langMode == "en" || _langMode == "ru")
+                return FallbackTranslate(nameKey);
+
             try
             {
                 LocalizationManager.InitializeIfNeeded();
                 string translated = LocalizationManager.GetTranslation(nameKey);
                 if (IsValidTranslation(nameKey, translated))
-                {
                     return translated;
-                }
             }
             catch { }
 
-            // Manual fallback for keys and English names
             return FallbackTranslate(nameKey);
         }
 
@@ -1190,13 +1832,23 @@ namespace OFSResourceXRay
                     return _russian ? direct.ru : direct.en;
             }
 
-            // Plain English resource name
+            // Plain English resource name → Russian
             if (_russian)
             {
                 foreach (var kv in FallbackNames)
                 {
                     if (kv.Key.Length >= 4 && lower.Contains(kv.Key))
                         return kv.Value.ru;
+                }
+            }
+            else
+            {
+                // Already-Russian label → English
+                foreach (var kv in FallbackNames)
+                {
+                    if (!string.IsNullOrEmpty(kv.Value.ru) &&
+                        string.Equals(kv.Value.ru, nameKey, StringComparison.OrdinalIgnoreCase))
+                        return kv.Value.en;
                 }
             }
 
@@ -1319,6 +1971,15 @@ namespace OFSResourceXRay
 
         private void EnsureStyles()
         {
+            Color black = new Color(0.08f, 0.06f, 0.12f, 1f);
+            Color purpleDeep = new Color(0.18f, 0.10f, 0.32f, 0.94f);
+            Color purpleAccent = new Color(0.62f, 0.38f, 0.95f, 1f);
+            Color purpleRowOff = new Color(0.28f, 0.16f, 0.45f, 0.92f);
+            Color purpleRowOn = new Color(0.36f, 0.22f, 0.58f, 0.95f);
+            Color purpleRowHi = new Color(0.48f, 0.30f, 0.78f, 0.98f);
+            Color btnPurple = new Color(0.42f, 0.24f, 0.68f, 1f);
+            Color donatePink = new Color(0.72f, 0.28f, 0.70f, 1f);
+
             if (_labelStyle == null)
             {
                 _labelStyle = new GUIStyle { fontSize = 14, fontStyle = FontStyle.Bold };
@@ -1329,18 +1990,57 @@ namespace OFSResourceXRay
                 _hudStyle = new GUIStyle { fontSize = 13, fontStyle = FontStyle.Bold };
                 _hudStyle.normal.textColor = Color.white;
             }
+            if (_titleStyle == null)
+            {
+                _titleStyle = new GUIStyle { fontSize = 16, fontStyle = FontStyle.Bold };
+                _titleStyle.normal.textColor = black;
+            }
+            if (_darkTextStyle == null)
+            {
+                _darkTextStyle = new GUIStyle { fontSize = 13, fontStyle = FontStyle.Bold };
+                _darkTextStyle.normal.textColor = black;
+                _darkTextStyle.alignment = TextAnchor.MiddleLeft;
+                _darkTextStyle.clipping = TextClipping.Clip;
+            }
+            if (_darkSmallStyle == null)
+            {
+                _darkSmallStyle = new GUIStyle { fontSize = 12, fontStyle = FontStyle.Bold };
+                _darkSmallStyle.normal.textColor = black;
+                _darkSmallStyle.alignment = TextAnchor.MiddleLeft;
+                _darkSmallStyle.clipping = TextClipping.Clip;
+            }
+            if (_brandStyle == null)
+            {
+                _brandStyle = new GUIStyle { fontSize = 13, fontStyle = FontStyle.Bold };
+                _brandStyle.normal.textColor = Color.white;
+                _brandStyle.alignment = TextAnchor.MiddleCenter;
+                _brandStyle.clipping = TextClipping.Clip;
+                _brandStyle.padding = new RectOffset(0, 0, 0, 0);
+                _brandStyle.margin = new RectOffset(0, 0, 0, 0);
+            }
+
             if (_pixel == null) _pixel = MakeTex(Color.white);
-            if (_panelBg == null) _panelBg = MakeTex(new Color(0f, 0f, 0f, 0.75f));
-            if (_rowOn == null) _rowOn = MakeTex(new Color(0.12f, 0.45f, 0.2f, 0.9f));
-            if (_rowOff == null) _rowOff = MakeTex(new Color(0.15f, 0.15f, 0.15f, 0.9f));
-            if (_rowHi == null) _rowHi = MakeTex(new Color(0.2f, 0.35f, 0.55f, 0.95f));
+            if (_panelBg == null) _panelBg = MakeTex(new Color(0.20f, 0.10f, 0.36f, 1f));
+            if (_panelAccent == null) _panelAccent = MakeTex(new Color(0.70f, 0.45f, 1f, 1f));
+            if (_chipBg == null) _chipBg = MakeTex(new Color(1f, 1f, 1f, 1f));
+            if (_btnBg == null) _btnBg = MakeTex(new Color(0.45f, 0.25f, 0.75f, 1f));
+            if (_btnAccent == null) _btnAccent = MakeTex(new Color(0.70f, 0.45f, 1f, 1f));
+            if (_donateBg == null) _donateBg = MakeTex(new Color(0.85f, 0.30f, 0.75f, 1f));
+            if (_rowOn == null) _rowOn = MakeTex(new Color(0.40f, 0.24f, 0.62f, 1f));
+            if (_rowOff == null) _rowOff = MakeTex(new Color(0.30f, 0.16f, 0.48f, 1f));
+            if (_rowHi == null) _rowHi = MakeTex(new Color(0.55f, 0.35f, 0.88f, 1f));
+            if (_fillStyle == null) _fillStyle = new GUIStyle();
         }
 
         private static Texture2D MakeTex(Color c)
         {
-            var t = new Texture2D(1, 1, TextureFormat.ARGB32, false);
-            t.SetPixel(0, 0, c);
-            t.Apply();
+            var t = new Texture2D(2, 2, TextureFormat.RGBA32, false);
+            t.wrapMode = TextureWrapMode.Clamp;
+            t.filterMode = FilterMode.Point;
+            t.hideFlags = HideFlags.HideAndDontSave;
+            Color[] px = { c, c, c, c };
+            t.SetPixels(px);
+            t.Apply(false, false);
             return t;
         }
 
@@ -1358,30 +2058,47 @@ namespace OFSResourceXRay
 
         private static readonly Dictionary<string, LocalizedPair> FallbackNames = new Dictionary<string, LocalizedPair>(StringComparer.OrdinalIgnoreCase)
         {
-            { "Item_BronzeName", new LocalizedPair { ru = "Бронза", en = "Bronze" } },
-            { "Item_SteelName", new LocalizedPair { ru = "Сталь", en = "Steel" } },
-            { "Item_TitaniumName", new LocalizedPair { ru = "Титан", en = "Titanium" } },
-            { "Item_ScrapName", new LocalizedPair { ru = "Лом", en = "Scrap" } },
-            { "Item_AntiqueName", new LocalizedPair { ru = "Антиквариат", en = "Antique" } },
-            { "bronze", new LocalizedPair { ru = "Бронза", en = "Bronze" } },
-            { "steel", new LocalizedPair { ru = "Сталь", en = "Steel" } },
-            { "titanium", new LocalizedPair { ru = "Титан", en = "Titanium" } },
-            { "iron", new LocalizedPair { ru = "Железо", en = "Iron" } },
-            { "copper", new LocalizedPair { ru = "Медь", en = "Copper" } },
-            { "coal", new LocalizedPair { ru = "Уголь", en = "Coal" } },
-            { "gold", new LocalizedPair { ru = "Золото", en = "Gold" } },
-            { "silver", new LocalizedPair { ru = "Серебро", en = "Silver" } },
-            { "quartz", new LocalizedPair { ru = "Кварц", en = "Quartz" } },
-            { "sulfur", new LocalizedPair { ru = "Сера", en = "Sulfur" } },
-            { "clay", new LocalizedPair { ru = "Глина", en = "Clay" } },
-            { "stone", new LocalizedPair { ru = "Камень", en = "Stone" } },
-            { "limestone", new LocalizedPair { ru = "Известняк", en = "Limestone" } },
-            { "sandstone", new LocalizedPair { ru = "Песчаник", en = "Sandstone" } },
-            { "diamond", new LocalizedPair { ru = "Алмаз", en = "Diamond" } },
-            { "platinum", new LocalizedPair { ru = "Платина", en = "Platinum" } },
-            { "uranium", new LocalizedPair { ru = "Уран", en = "Uranium" } },
-            { "scrap", new LocalizedPair { ru = "Лом", en = "Scrap" } },
-            { "antique", new LocalizedPair { ru = "Антиквариат", en = "Antique" } },
+            { "Item_BronzeName", L("\u0411\u0440\u043e\u043d\u0437\u0430", "Bronze") },
+            { "Item_SteelName", L("\u0421\u0442\u0430\u043b\u044c", "Steel") },
+            { "Item_TitaniumName", L("\u0422\u0438\u0442\u0430\u043d", "Titanium") },
+            { "Item_IronName", L("\u0416\u0435\u043b\u0435\u0437\u043e", "Iron") },
+            { "Item_CopperName", L("\u041c\u0435\u0434\u044c", "Copper") },
+            { "Item_CoalName", L("\u0423\u0433\u043e\u043b\u044c", "Coal") },
+            { "Item_GoldName", L("\u0417\u043e\u043b\u043e\u0442\u043e", "Gold") },
+            { "Item_SilverName", L("\u0421\u0435\u0440\u0435\u0431\u0440\u043e", "Silver") },
+            { "Item_ClayName", L("\u0413\u043b\u0438\u043d\u0430", "Clay") },
+            { "Item_StoneName", L("\u041a\u0430\u043c\u0435\u043d\u044c", "Stone") },
+            { "Item_LimestoneName", L("\u0418\u0437\u0432\u0435\u0441\u0442\u043d\u044f\u043a", "Limestone") },
+            { "Item_SandstoneName", L("\u041f\u0435\u0441\u0447\u0430\u043d\u0438\u043a", "Sandstone") },
+            { "Item_DiamondName", L("\u0410\u043b\u043c\u0430\u0437", "Diamond") },
+            { "Item_PlatinumName", L("\u041f\u043b\u0430\u0442\u0438\u043d\u0430", "Platinum") },
+            { "Item_UraniumName", L("\u0423\u0440\u0430\u043d", "Uranium") },
+            { "Item_QuartzName", L("\u041a\u0432\u0430\u0440\u0446", "Quartz") },
+            { "Item_SulfurName", L("\u0421\u0435\u0440\u0430", "Sulfur") },
+            { "Item_ScrapName", L("\u041b\u043e\u043c", "Scrap") },
+            { "Item_AntiqueName", L("\u0410\u043d\u0442\u0438\u043a\u0432\u0430\u0440\u0438\u0430\u0442", "Antique") },
+            { "bronze", L("\u0411\u0440\u043e\u043d\u0437\u0430", "Bronze") },
+            { "steel", L("\u0421\u0442\u0430\u043b\u044c", "Steel") },
+            { "titanium", L("\u0422\u0438\u0442\u0430\u043d", "Titanium") },
+            { "iron", L("\u0416\u0435\u043b\u0435\u0437\u043e", "Iron") },
+            { "copper", L("\u041c\u0435\u0434\u044c", "Copper") },
+            { "coal", L("\u0423\u0433\u043e\u043b\u044c", "Coal") },
+            { "gold", L("\u0417\u043e\u043b\u043e\u0442\u043e", "Gold") },
+            { "silver", L("\u0421\u0435\u0440\u0435\u0431\u0440\u043e", "Silver") },
+            { "quartz", L("\u041a\u0432\u0430\u0440\u0446", "Quartz") },
+            { "sulfur", L("\u0421\u0435\u0440\u0430", "Sulfur") },
+            { "clay", L("\u0413\u043b\u0438\u043d\u0430", "Clay") },
+            { "stone", L("\u041a\u0430\u043c\u0435\u043d\u044c", "Stone") },
+            { "limestone", L("\u0418\u0437\u0432\u0435\u0441\u0442\u043d\u044f\u043a", "Limestone") },
+            { "sandstone", L("\u041f\u0435\u0441\u0447\u0430\u043d\u0438\u043a", "Sandstone") },
+            { "diamond", L("\u0410\u043b\u043c\u0430\u0437", "Diamond") },
+            { "platinum", L("\u041f\u043b\u0430\u0442\u0438\u043d\u0430", "Platinum") },
+            { "uranium", L("\u0423\u0440\u0430\u043d", "Uranium") },
+            { "scrap", L("\u041b\u043e\u043c", "Scrap") },
+            { "antique", L("\u0410\u043d\u0442\u0438\u043a\u0432\u0430\u0440\u0438\u0430\u0442", "Antique") },
         };
+
+        private static LocalizedPair L(string ru, string en) => new LocalizedPair { ru = ru, en = en };
     }
 }
+
