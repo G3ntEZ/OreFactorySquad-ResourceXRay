@@ -8,7 +8,7 @@ using UnityEngine.InputSystem;
 using Il2Cpp;
 using Il2CppI2.Loc;
 
-[assembly: MelonInfo(typeof(OFSResourceXRay.ResourceXRayMod), "Resource X-Ray", "1.6.4", "G3ntEZ")]
+[assembly: MelonInfo(typeof(OFSResourceXRay.ResourceXRayMod), "Resource X-Ray", "1.6.5", "G3ntEZ")]
 [assembly: MelonGame("threeW", "Ore Factory Squad")]
 
 namespace OFSResourceXRay
@@ -28,6 +28,7 @@ namespace OFSResourceXRay
 
         private bool _espEnabled = true;
         private bool _menuOpen;
+        private bool _helpOpen;
         private bool _lowPerf;
         private string _langMode = "auto";
         private bool _russian = true;
@@ -106,8 +107,8 @@ namespace OFSResourceXRay
             LoadSelectedFromPrefs();
 
             LoggerInstance.Msg(_russian
-                ? "Resource X-Ray v1.6.3 | F8 меню | F4 перезагрузка | U метка | I очистка"
-                : "Resource X-Ray v1.6.3 | F8 menu | F4 reload | U marker | I clear");
+                ? "Resource X-Ray v1.6.5 | F8 меню | F10 инструкция | F4 перезагрузка | U метка | I очистка"
+                : "Resource X-Ray v1.6.5 | F8 menu | F10 help | F4 reload | U marker | I clear");
             LoggerInstance.Msg(_russian
                 ? "Обновлений для текущей версии игры пока не планируется."
                 : "No further updates planned for the current game version.");
@@ -171,6 +172,16 @@ namespace OFSResourceXRay
                 if (WasPressed(Key.F9))
                     ForceUnlockVehiclePurchase();
 
+                if (WasPressed(Key.F10))
+                {
+                    _helpOpen = !_helpOpen;
+                    if (_helpOpen)
+                        _menuOpen = false;
+                }
+
+                if (_helpOpen && WasPressed(Key.Escape))
+                    _helpOpen = false;
+
                 if (_menuOpen)
                     HandleMenuInput();
 
@@ -209,6 +220,8 @@ namespace OFSResourceXRay
                 DrawHud();
                 if (_menuOpen)
                     DrawMenu();
+                if (_helpOpen)
+                    DrawHelp();
                 if (_espEnabled)
                     DrawEsp();
                 DrawManualMarkers();
@@ -465,9 +478,9 @@ namespace OFSResourceXRay
             string perf = _lowPerf ? T(" | ЭКОН", " | LOW") : "";
             string status = _espEnabled
                 ? T(
-                    $"Рентген ВКЛ | выбрано:{_selectedIds.Count} | меток:{_entries.Count} | U:{_manualMarkers.Count}{perf} | F8 | F4 | F7 | I",
-                    $"X-Ray ON | selected:{_selectedIds.Count} | markers:{_entries.Count} | U:{_manualMarkers.Count}{perf} | F8 | F4 | F7 | I")
-                : T($"Рентген ВЫКЛ (F7) | F8 меню | U:{_manualMarkers.Count} | F4 | I", $"X-Ray OFF (F7) | F8 menu | U:{_manualMarkers.Count} | F4 | I");
+                    $"Рентген ВКЛ | выбрано:{_selectedIds.Count} | меток:{_entries.Count} | U:{_manualMarkers.Count}{perf} | F8 | F10 | F4 | F7",
+                    $"X-Ray ON | selected:{_selectedIds.Count} | markers:{_entries.Count} | U:{_manualMarkers.Count}{perf} | F8 | F10 | F4 | F7")
+                : T($"Рентген ВЫКЛ (F7) | F8 меню | F10 инструкция | U:{_manualMarkers.Count} | F4 | I", $"X-Ray OFF (F7) | F8 menu | F10 help | U:{_manualMarkers.Count} | F4 | I");
             SafeLabel(new Rect(12f, 12f, 920f, 28f), status, _hudStyle);
         }
 
@@ -479,8 +492,8 @@ namespace OFSResourceXRay
 
             SafeDrawTexture(panel, _panelBg);
             SafeLabel(new Rect(panel.x + 12f, panel.y + 8f, w - 24f, 22f),
-                T("Рентген — ↑↓ Enter | 1=всё 2=выкл | L=язык | F5=эконом | U=метка | I=очистка | F4=reload",
-                  "X-Ray — ↑↓ Enter | 1=all 2=off | L=lang | F5=low perf | U=marker | I=clear | F4=reload"),
+                T("Рентген — ↑↓ Enter | 1=всё 2=выкл | L=язык | F5=эконом | U=метка | I=очистка | F4=reload | F10=инструкция",
+                  "X-Ray — ↑↓ Enter | 1=all 2=off | L=lang | F5=low perf | U=marker | I=clear | F4=reload | F10=help"),
                 _hudStyle);
 
             float y = panel.y + 36f;
@@ -532,6 +545,74 @@ namespace OFSResourceXRay
                     T($"Список: {_menuScrollRows + 1}-{end} / {_oreOptions.Count}",
                       $"List: {_menuScrollRows + 1}-{end} / {_oreOptions.Count}"),
                     _hudStyle);
+            }
+        }
+
+        private void DrawHelp()
+        {
+            float w = 560f;
+            float h = 520f;
+            float x = Math.Max(20f, Screen.width - w - 24f);
+            Rect panel = new Rect(x, 48f, w, h);
+
+            SafeDrawTexture(panel, _panelBg);
+            SafeLabel(new Rect(panel.x + 12f, panel.y + 8f, w - 24f, 24f),
+                T("Resource X-Ray — инструкция (F10 / Esc)", "Resource X-Ray — help (F10 / Esc)"),
+                _hudStyle);
+
+            string[] lines = _russian
+                ? new[]
+                {
+                    "Как пользоваться:",
+                    "1) F8 — открыть меню руд",
+                    "2) ↑↓ / W S — выбрать руду",
+                    "3) Enter / E / Space — вкл/выкл руду",
+                    "4) 1 — включить все, 2 — выключить все",
+                    "5) F7 — рентген вкл/выкл",
+                    "6) F6 — обновить список руд на участке",
+                    "7) F4 — перезагрузить метки (если баг камня/руды)",
+                    "8) F5 — экономный режим для слабых ПК",
+                    "9) U — поставить/убрать метку на прицеле",
+                    "10) I — очистить все метки U",
+                    "11) L — язык: Авто / RU / EN",
+                    "12) F10 — эта инструкция",
+                    "",
+                    "Метки руд видны сквозь землю на любой дистанции.",
+                    "Одна метка = одна жила (например: Золото x12).",
+                    "",
+                    "Обновлений для текущей версии игры больше не будет.",
+                    "Поддержать разработчика:",
+                    "donationalerts.com/r/g3ntez"
+                }
+                : new[]
+                {
+                    "How to use:",
+                    "1) F8 — open ore menu",
+                    "2) Up/Down or W/S — select ore",
+                    "3) Enter / E / Space — toggle ore",
+                    "4) 1 — enable all, 2 — disable all",
+                    "5) F7 — ESP on/off",
+                    "6) F6 — refresh ore list on property",
+                    "7) F4 — reload markers (stone/ore bug fix)",
+                    "8) F5 — low performance mode",
+                    "9) U — place/remove marker at crosshair",
+                    "10) I — clear all U markers",
+                    "11) L — language: Auto / RU / EN",
+                    "12) F10 — this help panel",
+                    "",
+                    "Ore markers show through terrain at any distance.",
+                    "One marker = one vein (e.g. Gold x12).",
+                    "",
+                    "No further updates planned for current game version.",
+                    "Support the developer:",
+                    "donationalerts.com/r/g3ntez"
+                };
+
+            float y = panel.y + 36f;
+            for (int i = 0; i < lines.Length; i++)
+            {
+                SafeLabel(new Rect(panel.x + 12f, y, w - 24f, 20f), lines[i], _hudStyle);
+                y += 20f;
             }
         }
 

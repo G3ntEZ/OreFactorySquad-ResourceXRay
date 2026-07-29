@@ -76,6 +76,7 @@ If this mod helped you, you can leave a tip:
 | **F6** | Refresh ore list / rescan |
 | **F4** | Reload ore markers (fix desync / bugs) |
 | **F5** | Low performance mode on/off |
+| **F10** | Open / close in-game help |
 | **U** | Place / remove permanent marker |
 | **I** | Clear all permanent (U) markers |
 | **Esc** | Close menu |
@@ -177,6 +178,7 @@ MelonLoader-мод с **рентгеном руд**: метки сквозь з�
 | **F6** | Обновить список |
 | **F4** | Перезагрузить метки руд (если баг) |
 | **F5** | Экономный режим вкл/выкл |
+| **F10** | Инструкция по моду |
 | **U** | Поставить / убрать постоянную метку |
 | **I** | Очистить все метки U |
 | **Esc** | Закрыть меню |
