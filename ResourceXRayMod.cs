@@ -8,7 +8,7 @@ using UnityEngine.InputSystem;
 using Il2Cpp;
 using Il2CppI2.Loc;
 
-[assembly: MelonInfo(typeof(OFSResourceXRay.ResourceXRayMod), "Resource X-Ray", "1.6.3", "G3ntEZ")]
+[assembly: MelonInfo(typeof(OFSResourceXRay.ResourceXRayMod), "Resource X-Ray", "1.6.4", "G3ntEZ")]
 [assembly: MelonGame("threeW", "Ore Factory Squad")]
 
 namespace OFSResourceXRay
@@ -602,9 +602,7 @@ namespace OFSResourceXRay
             if (cam == null)
                 return;
 
-            Vector3 origin = cam.transform.position;
-            Vector3 dir = cam.transform.forward;
-            Vector3 placePos = origin + dir * 8f;
+            Vector3 placePos = GetCrosshairWorldPoint(cam);
 
             int nearest = -1;
             float nearestSq = float.MaxValue;
@@ -618,7 +616,7 @@ namespace OFSResourceXRay
                 }
             }
 
-            if (nearest >= 0 && nearestSq <= 16f)
+            if (nearest >= 0 && nearestSq <= 9f)
             {
                 string removed = _manualMarkers[nearest].Label;
                 _manualMarkers.RemoveAt(nearest);
@@ -633,6 +631,17 @@ namespace OFSResourceXRay
                 Label = T($"Метка #{index}", $"Marker #{index}")
             });
             LoggerInstance.Msg(T($"Поставлена метка #{index}", $"Placed marker #{index}"));
+        }
+
+        private static Vector3 GetCrosshairWorldPoint(Camera cam)
+        {
+            Ray ray = cam.ScreenPointToRay(new Vector3(Screen.width * 0.5f, Screen.height * 0.5f, 0f));
+            const float maxDist = 500f;
+
+            if (Physics.Raycast(ray.origin, ray.direction, out RaycastHit hit, maxDist))
+                return hit.point + hit.normal * 0.02f;
+
+            return ray.origin + ray.direction * 12f;
         }
 
         private void ClearAllManualMarkers()

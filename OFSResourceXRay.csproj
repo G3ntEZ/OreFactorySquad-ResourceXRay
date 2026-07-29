@@ -59,6 +59,10 @@
       <HintPath>$(AsmDir)\Unity.InputSystem.dll</HintPath>
       <Private>false</Private>
     </Reference>
+    <Reference Include="UnityEngine.PhysicsModule">
+      <HintPath>$(AsmDir)\UnityEngine.PhysicsModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
     <Reference Include="UnityEngine">
       <HintPath>$(AsmDir)\UnityEngine.dll</HintPath>
       <Private>false</Private>
